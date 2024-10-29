@@ -31,6 +31,7 @@ Clone the repository and install the required packages:
 git clone <repository-url>
 cd simple-rag-chatbot
 pip install -r requirements.txt
+pip install -r Tesseract_req.txt
 ```
 
 ### Tesseract Installation
@@ -66,17 +67,14 @@ For Tesseract OCR, you need to install it separately:
 
 ### Code Structure
 
-- `app.py`: The main application file that contains the Streamlit interface and logic for handling PDF uploads and user interactions.
+- `Rag_bot.py`: The main application file that contains the Streamlit interface and logic for handling PDF uploads and user interactions.
 - `requirements.txt`: A list of Python packages required for the project.
+- `Tesseract_req.txt`: Required modules for TesseractORC to run.
 - `README.md`: This documentation file.
 
 ### Contributing
 
 Contributions are welcome! If you have suggestions for improvements or new features, feel free to open an issue or submit a pull request.
-
-### License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
 
 ### Acknowledgements
 
