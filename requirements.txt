@@ -2,13 +2,12 @@ streamlit
 langchain
 langchain-community
 faiss-cpu
+pdfminer.six
 unstructured
 pypdf
-pdfminer
 pi_heif
 onnx
 pdf2image
-pdfminer.six
 pikepdf
 pi_heif
 pypdf
