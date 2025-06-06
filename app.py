@@ -1,74 +1,63 @@
 import streamlit as st
 import os
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain.document_loaders import UnstructuredPDFLoader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.chains import RetrievalQA
+from src.loader import load_documents
+from src.splitter import split_documents
+from src.embedder import embed_texts
+from src.vectorstore import build_faiss_index
+from src.qa import get_answer
 from langchain_community.llms import Ollama
 
-os.environ["OCR_AGENT"] = "tesseract"
+st.set_page_config(page_title="RAG Bot", layout="wide")
 
-st.set_page_config(page_title="RAG_BOT", layout="wide", initial_sidebar_state="auto", menu_items=None)
+st.title("Simple RAG Bot")
+st.write("Upload PDF files and ask questions based on their content.")
 
-llm = Ollama(model="llama3",temperature=0.9,num_predict=5000)
-
-def get_ans(documents, question):
-    all_chunks = []
-    for document in documents:
-        loader = UnstructuredPDFLoader(document)
-        docs = loader.load()
-        text_splitter = CharacterTextSplitter(
-            separator='\n',
-            chunk_size=3500,
-            chunk_overlap=1000
-        )
-        text_chunks = text_splitter.split_documents(docs)
-        all_chunks.extend(text_chunks)
-    embeddings = HuggingFaceEmbeddings()
-    knowledge_base = FAISS.from_documents(all_chunks, embeddings)
-    qa_chain = RetrievalQA.from_chain_type(
-        llm,
-        retriever=knowledge_base.as_retriever()
-    )
-
-    response = qa_chain.invoke(question)
-    return response['result']
-
-st.title("RAG Bot")
-st.write("Upload a PDF and ask questions about its contents.")
-
-# PDF file uploader
 uploaded_files = st.file_uploader("Upload PDF files", type="pdf", accept_multiple_files=True)
 
-if uploaded_files:
+# chat memory
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "rag_index" not in st.session_state:
+    st.session_state.rag_index = None
+    st.session_state.chunks = []
+
+# load uploaded file and index it
+if uploaded_files and st.session_state.rag_index is None:
     pdf_paths = []
     for uploaded_file in uploaded_files:
-        # Save the uploaded file to a temporary location
         with open(uploaded_file.name, "wb") as f:
             f.write(uploaded_file.getbuffer())
         pdf_paths.append(uploaded_file.name)
-    
-    # Conversation history
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
 
-    # Display previous messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    raw_docs = load_documents(pdf_paths)
+    chunks = split_documents(raw_docs)
+    embeddings = embed_texts(chunks)
+    index = build_faiss_index(embeddings)
 
-    # Accept user input
-    if prompt := st.chat_input("What is your question?"):
-        st.chat_message("user").markdown(prompt)
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state.rag_index = index
+    st.session_state.chunks = chunks
 
-        # Get response
-        response = get_ans(pdf_paths, prompt)
+# Show chat history
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
-        with st.chat_message("assistant"):
-            st.markdown(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+# Chat
+query = st.chat_input("Ask a question based on the uploaded documents...")
+if query and st.session_state.rag_index is not None:
+    st.chat_message("user").markdown(query)
+    st.session_state.messages.append({"role": "user", "content": query})
 
-else:
-    st.write("Please upload at least one PDF file to start.")
+    llm = Ollama(model="llama3", temperature=0.9, num_predict=5000)
+
+    response = get_answer(
+        query=query,
+        llm=llm,
+        faiss_index=st.session_state.rag_index,
+        chunks=st.session_state.chunks
+    )
+
+    with st.chat_message("assistant"):
+        st.markdown(response)
+    st.session_state.messages.append({"role": "assistant", "content": response})
