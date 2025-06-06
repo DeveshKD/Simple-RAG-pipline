@@ -1,4 +1,4 @@
-# Simple RAG Chatbot
+# Simple RAG Pipline with LLM QA
 
 A simple Retrieval-Augmented Generation (RAG) chatbot built using Streamlit and basic RAG, NLP libraries/frameworks/tools like Ollama, Faiss, PyMuPDF and more. This application allows users to upload PDF documents and ask questions about their contents, leveraging the power of LLMs for dynamic responses.
 
@@ -28,7 +28,7 @@ Clone the repository and install the required packages:
 
 ```bash
 git clone <repository-url>
-cd simple-rag-chatbot
+cd simple-rag-pipline
 pip install -r requirements.txt
 pip install -r Tesseract_req.txt
 ```
