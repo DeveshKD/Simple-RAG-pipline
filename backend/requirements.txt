@@ -1,0 +1,9 @@
+passlib[bcrypt]
+python-jose
+pydantic-settings
+requests
+psycopg2[binary]
+fastapi
+uvicorn
+chromadb
+google-generativeai
