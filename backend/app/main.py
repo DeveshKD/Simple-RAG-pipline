@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth_api
+from app.api import query_api
 
 app = FastAPI(title="Multi-Tenant RAG Platform")
 
@@ -14,6 +15,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_api.router)
+app.include_router(query_api.router)
 
 @app.get("/")
 def root():
