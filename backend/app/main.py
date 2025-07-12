@@ -2,6 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth_api
 from app.api import query_api
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Multi-Tenant RAG Platform")
 
