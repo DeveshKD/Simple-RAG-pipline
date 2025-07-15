@@ -160,6 +160,7 @@ class CSVIngestor(BaseDocumentIngestor):
                         "doc_id": os.path.splitext(os.path.basename(self.file_path))[0],
                         "column_headers": [],
                         "row_count": 0,
+                        "source_type": "csv"
                     }
                     return
 
@@ -247,7 +248,8 @@ class TXTIngestor(BaseDocumentIngestor):
             metadata = {
                 "filename": os.path.basename(self.file_path),
                 "last_modified": os.path.getmtime(self.file_path),
-                "doc_id": os.path.splitext(os.path.basename(self.file_path))[0]  # Name without extension
+                "doc_id": os.path.splitext(os.path.basename(self.file_path))[0],
+                "source_type": "txt"
             }
             return metadata
         except Exception as e:
@@ -345,6 +347,7 @@ class PDFIngestor(BaseDocumentIngestor):
             clean_metadata["filename"] = os.path.basename(self.file_path)
             clean_metadata["doc_id"] = os.path.splitext(os.path.basename(self.file_path))[0]
             clean_metadata["page_count"] = len(reader.pages)
+            clean_metadata["source_type"] = "pdf"
             
             return clean_metadata
         except Exception as e:
@@ -396,7 +399,8 @@ class DOCXIngestor(BaseDocumentIngestor):
                 "title": properties.title,
                 "created": str(properties.created), # Convert to string for easier handling
                 "modified": str(properties.modified), # Convert to string
-                "doc_id": os.path.splitext(os.path.basename(self.file_path))[0]
+                "doc_id": os.path.splitext(os.path.basename(self.file_path))[0],
+                "source_type": "docx"
             }
             return metadata
         except Exception as e:
