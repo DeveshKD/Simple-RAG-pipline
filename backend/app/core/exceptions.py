@@ -9,3 +9,18 @@ class DocumentIngestionError(ChatbotBaseException):
     def __init__(self, message: str = "Error during document ingestion.", details: str = None):
         super().__init__(message)
         self.details = details
+
+class DocumentProcessingError(ChatbotBaseException):
+    """Exception raised for errors during document processing (cleaning, chunking)."""
+    def __init__(self, message: str = "Error during document processing.", details: str = None):
+        super().__init__(message)
+        self.details = details
+
+class LLMError(ChatbotBaseException):
+    """
+    Exception raised for errors interacting with a Large Language Model API
+    (e.g., API key error, network issues, failed response, embedding failure).
+    """
+    def __init__(self, message: str = "Error interacting with the Language Model.", details: str = None):
+        super().__init__(message)
+        self.details = details
