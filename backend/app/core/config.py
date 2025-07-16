@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     #vector store
     chroma_db_path: str = Field(default="./backend/data/vector_store", validation_alias="CHROMA_DB_PATH")
+    chroma_db_collection_name: str = Field(default="all_documents", validation_alias="CHROMA_DB_COLLECTION_NAME")
 
     #llm api
     google_genai_api_key: str = Field(..., validation_alias="GEMINI_API_KEY")

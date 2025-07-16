@@ -24,3 +24,9 @@ class LLMError(ChatbotBaseException):
     def __init__(self, message: str = "Error interacting with the Language Model.", details: str = None):
         super().__init__(message)
         self.details = details
+
+class VectorDBError(ChatbotBaseException):
+    """Exception raised for errors related to vector database operations (e.g., connection, query failure)."""
+    def __init__(self, message: str = "Error interacting with the vector database.", details: str = None):
+        super().__init__(message)
+        self.details = details
