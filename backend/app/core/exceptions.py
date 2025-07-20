@@ -30,3 +30,9 @@ class VectorDBError(ChatbotBaseException):
     def __init__(self, message: str = "Error interacting with the vector database.", details: str = None):
         super().__init__(message)
         self.details = details
+
+class QueryProcessingError(ChatbotBaseException):
+    """Custom exception for errors during query processing or answer extraction."""
+    def __init__(self, message: str = "Error during query processing.", details: str = None):
+        super().__init__(message)
+        self.details = details
