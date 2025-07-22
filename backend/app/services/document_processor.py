@@ -94,12 +94,14 @@ class DocumentProcessorService:
                 current_chunk_sentences = []
 
 
-    def get_embeddings(self, texts: List[str]) -> List[List[float]]:
+    async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
         """
         Generates embeddings for a list of text chunks using the Google Gemini API.
-        Handles batching and falls back to individual embeddings on failure.
+        It first attempts to process all chunks in a single batch for speed.
+        If that fails (e.g., due to size/rate limits), it automatically falls
+        back to a more robust multi-batching approach.
         """
-        if not settings.google_genai_api_key:
+        if not settings.google_genai_api_key or settings.google_genai_api_key == "YOUR_GEMINI_API_KEY_HERE":
             msg = "GEMINI_API_KEY is not configured. Cannot generate embeddings."
             logger.error(msg)
             raise LLMError(message=msg)
@@ -107,22 +109,59 @@ class DocumentProcessorService:
         if not texts:
             return []
 
+        # Fast Path: Attempt a single batch first
         try:
+            logger.info(f"Attempting to generate embeddings for {len(texts)} chunks in a single batch...")
             result = genai.embed_content(
                 model=f"models/{settings.google_genai_embedding_model_id}",
                 content=texts,
                 task_type="RETRIEVAL_DOCUMENT"
             )
-            logger.info(f"Successfully generated {len(result['embedding'])} embeddings in a batch.")
+            logger.info("Single batch embedding successful.")
             return result['embedding']
-        except Exception as e:
-            logger.error(f"Batch embedding failed: {e}. Falling back to individual embeddings.", exc_info=True)
-            # Fallback logic can be added here if needed, but for now, we'll raise the error
-            # to signal a failure in processing this document's chunks.
-            raise LLMError(message="Failed to generate embeddings for document chunks.", details=str(e))
+        
+        except Exception as single_batch_error:
+            # This is the expected failure path for large documents.
+            logger.warning(
+                f"Single batch embedding failed (likely due to size or rate limit): {single_batch_error}. "
+                "Falling back to multi-batch processing."
+            )
+            
+            # Fallback Path: Multi-batch processing
+            BATCH_SIZE = 90  # A safe batch size to avoid hitting limits
+            all_embeddings = []
+            
+            logger.info(f"Processing {len(texts)} chunks in smaller batches of {BATCH_SIZE}...")
+
+            for i in range(0, len(texts), BATCH_SIZE):
+                batch_texts = texts[i:i + BATCH_SIZE]
+                
+                try:
+                    result = genai.embed_content(
+                        model=f"models/{settings.google_genai_embedding_model_id}",
+                        content=batch_texts,
+                        task_type="RETRIEVAL_DOCUMENT"
+                    )
+                    all_embeddings.extend(result['embedding'])
+                    logger.info(f"  ...processed batch {i // BATCH_SIZE + 1}/{(len(texts) + BATCH_SIZE - 1) // BATCH_SIZE}")
+                    
+                    # Optional: A small delay can help prevent rapid-fire requests
+                    # that might trigger rate limits even with small batches.
+                    await asyncio.sleep(1)
+
+                except Exception as multi_batch_error:
+                    # If even a small batch fails, it's a more serious problem.
+                    logger.error(f"Multi-batch embedding FAILED on batch starting at index {i}: {multi_batch_error}", exc_info=True)
+                    raise LLMError(
+                        message=f"A small batch of chunks failed to embed, indicating a persistent API issue. Aborting for this document.",
+                        details=str(multi_batch_error)
+                    )
+            
+            logger.info(f"Multi-batch embedding successful. Generated {len(all_embeddings)} embeddings.")
+            return all_embeddings
 
 
-    def process_documents(self, raw_documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def process_documents(self, raw_documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Processes a list of raw documents through the full clean->chunk->embed pipeline.
 
@@ -160,7 +199,7 @@ class DocumentProcessorService:
 
             # Step 3: Generate embeddings for the chunks
             try:
-                chunk_embeddings = self.get_embeddings(text_chunks)
+                chunk_embeddings = await self.get_embeddings(text_chunks)
             except LLMError as e:
                 logger.error(f"Could not get embeddings for document '{doc_id}': {e.message}. Skipping document.")
                 continue

@@ -53,6 +53,7 @@ class QueryProcessorService:
         {consolidated_context}
         ---
         Your Task: Based ONLY on the provided Context, answer the User Query. If the Context does not contain the answer, you MUST respond with the exact phrase: {LLM_NO_ANSWER_RESPONSE}
+        Also explain over your answer in brief if u retireved the answer from the context.
         """
         try:
             response = await self.chat_model.generate_content_async(prompt)
