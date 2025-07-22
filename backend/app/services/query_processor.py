@@ -1,3 +1,5 @@
+# In backend/app/services/query_processor.py
+
 import logging
 import asyncio
 from typing import List, Dict, Any
@@ -10,8 +12,11 @@ from .vector_db_service import VectorDBService
 
 logger = logging.getLogger(__name__)
 
-# A constant to uniquely identify when the LLM itself couldn't find the answer in the context
 LLM_NO_ANSWER_RESPONSE = "LLM_INTERNAL_NO_ANSWER_FLAG"
+# Define a relevance threshold for ChromaDB's L2 score.
+# A lower score is better. Anything > RELEVANCE_THRESHOLD will be discarded.
+# This value may need tuning based on your specific embedding model and data.
+RELEVANCE_THRESHOLD = 1.0 
 
 class QueryProcessorService:
     """
@@ -43,7 +48,6 @@ class QueryProcessorService:
             raise LLMError("Failed to generate embedding for the user query.", details=str(e))
 
     async def _synthesize_answer(self, query_text: str, context_chunks: List[str]) -> str:
-        """Uses the LLM to generate an answer, or a special flag if no answer is found."""
         if not self.chat_model: return "Error: Model not configured."
         consolidated_context = "\n\n---\n\n".join(context_chunks)
         prompt = f"""
@@ -52,8 +56,7 @@ class QueryProcessorService:
         ---
         {consolidated_context}
         ---
-        Your Task: Based ONLY on the provided Context, answer the User Query. If the Context does not contain the answer, you MUST respond with the exact phrase: {LLM_NO_ANSWER_RESPONSE}
-        Also explain over your answer in brief if u retireved the answer from the context.
+        Your Task: Based ONLY on the provided Context, answer the User Query. Also explain over your answer in brief if u retireved the answer from the context. If the Context does not contain the answer, you MUST respond with the exact phrase: {LLM_NO_ANSWER_RESPONSE}
         """
         try:
             response = await self.chat_model.generate_content_async(prompt)
@@ -61,14 +64,9 @@ class QueryProcessorService:
         except Exception as e:
             logger.error(f"Error synthesizing answer: {e}", exc_info=True)
             return "An error occurred while generating the answer."
-
+    
     async def _generate_helpful_failure_response(self, failure_type: str, query_text: str) -> str:
-        """
-        Generates a dynamic, conversational "not found" response using the LLM.
-        This avoids hard-coded, robotic messages.
-        """
         if not self.chat_model: return "I'm sorry, I couldn't find an answer and my response generator is also offline."
-
         if failure_type == "retrieval_failure":
             prompt = f"""
             You are a helpful AI assistant. Your primary task failed because when the user asked "{query_text}", you could not find any relevant documents at all.
@@ -87,40 +85,59 @@ class QueryProcessorService:
             - This implies they are asking about the right general topic, but need to ask a different question about it.
             - Keep it concise and friendly. Do not use your general knowledge.
             """
-        else:
-            return "I'm sorry, an unexpected error occurred."
-
+        else: return "I'm sorry, an unexpected error occurred."
         try:
             response = await self.chat_model.generate_content_async(prompt)
             return response.text.strip()
         except Exception as e:
             logger.error(f"Error generating helpful failure response: {e}", exc_info=True)
-            # Fallback to a hard-coded response if this specialized call fails
             return "I'm sorry, I couldn't find an answer to your question."
 
+
     async def process_query(self, query_text: str, n_results: int) -> str:
-        """Processes a query with dynamic 'not found' handling."""
-        logger.info(f"Processing query with dynamic failure response: '{query_text}'")
+        """Processes a query with intelligent, threshold-based retrieval."""
+        logger.info(f"Processing query with threshold-based retrieval: '{query_text}'")
         try:
             query_embedding = await self._generate_query_embedding(query_text)
-            relevant_chunks_data = self.vector_db.query_documents(query_embedding=query_embedding, n_results=n_results)
 
-            # Stage 1: Retrieval Failure
-            if not relevant_chunks_data:
-                logger.info("Stage 1 Failure: No relevant chunks found.")
+            # FIX:
+            # 1. Query for more results than needed to get a good sample.
+            # We query for at least 10, or more if the user asks for more.
+            query_for_count = max(10, n_results)
+            
+            # 2. Retrieve initial chunks
+            initial_chunks_data = self.vector_db.query_documents(
+                query_embedding=query_embedding,
+                n_results=query_for_count
+            )
+
+            if not initial_chunks_data:
+                logger.info("Vector DB is empty or returned no results. True retrieval failure.")
                 return await self._generate_helpful_failure_response("retrieval_failure", query_text)
 
-            context_chunks_text = [chunk['text_chunk'] for chunk in relevant_chunks_data]
-            logger.info(f"Retrieved {len(context_chunks_text)} chunks for context.")
+            # 3. Filter the results based on the relevance threshold
+            truly_relevant_chunks = [
+                chunk for chunk in initial_chunks_data 
+                if chunk.get("distance") is not None and chunk["distance"] < RELEVANCE_THRESHOLD
+            ]
+            logger.info(f"Retrieved {len(initial_chunks_data)} chunks, {len(truly_relevant_chunks)} survived relevance threshold of < {RELEVANCE_THRESHOLD}.")
 
+            # Retrieval Failure
+            if not truly_relevant_chunks:
+                logger.info("Stage 1 Failure: No chunks met the relevance threshold.")
+                return await self._generate_helpful_failure_response("retrieval_failure", query_text)
+
+            # 4. Take the top N of the *relevant* chunks
+            context_chunks_for_llm = truly_relevant_chunks[:n_results]
+            context_chunks_text = [chunk['text_chunk'] for chunk in context_chunks_for_llm]
+            
             llm_response = await self._synthesize_answer(query_text, context_chunks_text)
 
-            # Stage 2: Synthesis Failure
+            # Synthesis Failure
             if llm_response == LLM_NO_ANSWER_RESPONSE:
-                logger.info("Stage 2 Failure: LLM found no answer in the retrieved context.")
+                logger.info("Stage 2 Failure: LLM found no answer in the relevant context.")
                 return await self._generate_helpful_failure_response("synthesis_failure", query_text)
 
-            # Success Case
             logger.info("Successfully generated a synthesized answer.")
             return llm_response
 
@@ -134,7 +151,6 @@ if __name__ == "__main__":
     import asyncio
     logging.basicConfig(level=settings.log_level, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-    # --- Mock Service Dependencies for different test cases ---
     class MockVectorDBSuccess:
         def query_documents(self, query_embedding, n_results):
             logger.info("MockVectorDBSuccess: Returning relevant chunks.")
