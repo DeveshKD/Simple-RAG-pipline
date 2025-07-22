@@ -30,6 +30,10 @@ try:
     from PyPDF2 import PdfReader
 except ImportError:
     PdfReader = None
+try:
+    from pdf2image import convert_from_path
+except ImportError:
+    convert_from_path = None
 
 from ..core.config import settings  # Example if config is needed
 from ..core.exceptions import DocumentIngestionError  # Import custom exception
@@ -260,94 +264,93 @@ class TXTIngestor(BaseDocumentIngestor):
 
 class PDFIngestor(BaseDocumentIngestor):
     """
-    Handles PDF files.
-    Uses PyPDF2 or pdfminer.six to extract text and metadata.
+    Handles PDF files, with robust support for both text-based and scanned (image-based) PDFs.
     """
-
     def __init__(self, file_path: str, config: Dict[str, Any] = None):
         """
         Initializes the PDF ingestor.
-
-        Args:
-            file_path (str): The path to the PDF file.
-            config (Dict[str, Any]): A dictionary of configuration options, including:
-                use_ocr (bool): Whether to use OCR if text extraction fails (default: False).
-                ocr_language (str): The language to use for OCR (default: eng).
         """
         super().__init__(file_path, config)
-        self.use_ocr = self.config.get("use_ocr", False)
+        # We don't need a use_ocr flag anymore; the logic will handle it automatically.
         self.ocr_language = self.config.get("ocr_language", "eng")
+        if PdfReader is None:
+            raise DocumentIngestionError("PyPDF2 library not found. It is required for all PDF processing.")
 
     def load_document(self) -> str:
-        """Extracts text from the PDF file using PyPDF2."""
-        if PdfReader is None:
-            logger.error("PyPDF2 library is not installed. Cannot process PDF files.")
-            raise DocumentIngestionError(message="PyPDF2 library not found. Install it to process PDFs.")
+        """
+        Extracts text from a PDF. It first attempts a direct text extraction.
+        If the extracted text is minimal or empty (indicating a scanned PDF),
+        it automatically falls back to performing OCR on each page.
+        """
+        all_text = []
         try:
+            # Attempt Direct Text Extraction
+            logger.info(f"Attempting direct text extraction for PDF: {self.file_path}")
             reader = PdfReader(self.file_path)
-            text_content = []
+            direct_text_content = []
             for page in reader.pages:
                 extracted_text = page.extract_text()
                 if extracted_text:
-                    text_content.append(extracted_text)
-            return "\n".join(text_content)
-        except Exception as e:
-            msg = f"Error reading PDF file with PyPDF2: {self.file_path}"
-            logger.error(f"{msg}: {e}", exc_info=True)
-            if self.use_ocr:
-                logger.info(f"Attempting OCR on {self.file_path} due to initial extraction failure.")
-                return self._ocr_document()  # Attempt OCR if enabled
-            else:
-                raise DocumentIngestionError(message=msg, details=str(e))
+                    direct_text_content.append(extracted_text)
+            
+            full_direct_text = "\n".join(direct_text_content).strip()
 
-    def _ocr_document(self) -> str:
-        """Performs OCR on the PDF file using pytesseract."""
-        if Image is None or pytesseract is None:
-            logger.error("Pillow or pytesseract is not installed. Cannot perform OCR.")
-            raise DocumentIngestionError(message="Pillow and pytesseract library not found. Install them to perform OCR.")
-        try:
-            from PIL import Image
-            import pytesseract
-            from PyPDF2 import PdfReader
+            # Check if Direct Extraction was Sufficient
+            # If we got a reasonable amount of text, we can assume it's not a scanned document.
+            if full_direct_text and (len(full_direct_text) > 10 * len(reader.pages)):
+                logger.info("Direct text extraction successful. Skipping OCR.")
+                return full_direct_text
 
-            reader = PdfReader(self.file_path)
-            text_content = []
-            for page_num in range(len(reader.pages)):
-                page = reader.pages[page_num]
-                image = page.to_image()
-                text = pytesseract.image_to_string(image, lang=self.ocr_language)
-                text_content.append(text)
-            return "\n".join(text_content)
-        except pytesseract.TesseractNotFoundError:
-            logger.error("Tesseract is not installed or not in PATH. Cannot perform OCR.")
-            raise DocumentIngestionError(
-                message="Tesseract OCR engine not found. Ensure it's installed and in PATH."
-            )  # User action required
+            # Fallback to OCR if Needed
+            logger.warning(f"Direct text extraction yielded minimal text for '{self.file_path}'. Falling back to OCR.")
+            
+            # Check for OCR dependencies
+            if convert_from_path is None or pytesseract is None or Image is None:
+                raise DocumentIngestionError("OCR dependencies (pdf2image, pytesseract, Pillow) are not installed, but the PDF appears to be scanned.")
+
+            # Convert PDF pages to images
+            try:
+                images = convert_from_path(self.file_path)
+            except Exception as e: # Catch poppler errors specifically if possible
+                 if "Poppler" in str(e):
+                      logger.error("Poppler utility not found. Please install it and ensure it's in your system's PATH to process scanned PDFs.")
+                      raise DocumentIngestionError("Poppler not found. OCR on PDF is not possible without it.")
+                 raise e
+
+
+            ocr_text_content = []
+            for i, image in enumerate(images):
+                logger.debug(f"Performing OCR on page {i+1} of {len(images)}...")
+                try:
+                    text_from_page = pytesseract.image_to_string(image, lang=self.ocr_language)
+                    if text_from_page:
+                        ocr_text_content.append(text_from_page)
+                except pytesseract.TesseractNotFoundError:
+                    logger.error("Tesseract OCR engine not found. Ensure it's installed and in your PATH.")
+                    raise DocumentIngestionError("Tesseract OCR engine not found.")
+
+            logger.info(f"OCR processing completed for '{self.file_path}'.")
+            return "\n".join(ocr_text_content)
+
         except Exception as e:
-            msg = f"Error performing OCR on PDF file: {self.file_path}"
+            msg = f"An unexpected error occurred during PDF processing for '{self.file_path}'"
             logger.error(f"{msg}: {e}", exc_info=True)
             raise DocumentIngestionError(message=msg, details=str(e))
 
     def extract_metadata(self) -> Dict[str, Any]:
         """Extracts metadata from the PDF file using PyPDF2."""
-        if PdfReader is None:
-             logger.error("PyPDF2 library is not installed. Cannot process PDF files.")
-             raise DocumentIngestionError(message="PyPDF2 library not found. Install it to process PDFs.")
         try:
             reader = PdfReader(self.file_path)
             pdf_info = reader.metadata or {}
+            
+            # Create a new, standard Python dictionary from the PyPDF2 object.
+            clean_metadata = {key: str(value) for key, value in pdf_info.items()}
 
-            # --- THE FIX IS HERE ---
-            # 1. Create a new, standard Python dictionary.
-            # 2. Copy the items from the PyPDF2 metadata object into the new dict.
-            #    (Using a dictionary comprehension is a clean way to do this).
-            clean_metadata = {key: value for key, value in pdf_info.items()}
-
-            # 3. Now, safely add your custom keys to your new dictionary.
+            # Add our custom metadata
             clean_metadata["filename"] = os.path.basename(self.file_path)
             clean_metadata["doc_id"] = os.path.splitext(os.path.basename(self.file_path))[0]
             clean_metadata["page_count"] = len(reader.pages)
-            clean_metadata["source_type"] = "pdf"
+            clean_metadata["source_type"] = "pdf" # Add the source type hint
             
             return clean_metadata
         except Exception as e:
