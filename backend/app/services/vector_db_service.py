@@ -69,7 +69,18 @@ class VectorDBService:
                 ids.append(doc["chunk_id"])
                 texts.append(doc["text_chunk"])
                 embeddings.append(doc["embedding"])
-                metadatas.append(doc["metadata"])
+                sanitized_metadata = {}
+                for key, value in doc["metadata"].items():
+                    if value is None:
+                        sanitized_metadata[key] = ""  # Replace None with an empty string
+                    elif isinstance(value, (bool, int, float, str)):
+                        sanitized_metadata[key] = value # Keep valid types as they are
+                    else:
+                        # Convert any other types to string as a safe fallback
+                        sanitized_metadata[key] = str(value)
+
+                metadatas.append(sanitized_metadata)
+                
             except KeyError as ke:
                 logger.error(f"Missing required key in document: {ke}")
                 raise VectorDBError(message=f"Missing required key in document: {ke}") from ke

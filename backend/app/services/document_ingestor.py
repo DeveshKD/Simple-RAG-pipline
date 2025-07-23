@@ -27,11 +27,6 @@ except ImportError:
     pytesseract = None
 
 try:
-    from PyPDF2 import PdfReader
-except ImportError:
-    PdfReader = None
-
-try:
     import fitz  # PyMuPDF is imported as fitz
 except ImportError:
     fitz = None
