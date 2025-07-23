@@ -6,6 +6,8 @@ from .core.config import settings
 from .core.exceptions import VectorDBError
 from .api import documents_api, query_api
 from . import dependencies as deps
+from .database import engine
+from .models import db_models
 
 # Configure Logging
 logging.basicConfig(
@@ -34,6 +36,8 @@ async def lifespan(app: FastAPI):
         deps.query_processor_service = deps.QueryProcessorService(
             vector_db_service=deps.vector_db_service
         )
+        logger.info("Initializing database and creating tables if they don't exist...")
+        db_models.Base.metadata.create_all(bind=engine)
         logger.info("All application services initialized successfully.")
     
     except VectorDBError as e:
