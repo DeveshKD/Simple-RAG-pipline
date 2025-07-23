@@ -109,3 +109,23 @@ async def list_documents(vector_db: VectorDBService = Depends(get_vector_db_serv
     except VectorDBError as e:
         logger.error(f"Failed to list documents from VectorDB: {e.message}", exc_info=True)
         raise HTTPException(status_code=500, detail=e.message)
+    
+@router.delete("/documents/clear-all", response_model=models.schemas.StatusResponse)
+async def clear_all_documents(vector_db: VectorDBService = Depends(get_vector_db_serv)):
+    """
+    Deletes all documents from the vector database. This is an administrative
+    action to reset the knowledge base.
+    """
+    logger.warning("Received request to clear all documents from the knowledge base.")
+    try:
+        vector_db.clear_collection()
+        return models.schemas.StatusResponse(
+            status="success",
+            message="Knowledge base has been cleared successfully."
+        )
+    except VectorDBError as e:
+        logger.error(f"Failed to clear knowledge base: {e.message}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to clear knowledge base: {e.message}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while clearing the knowledge base: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected server error occurred.")

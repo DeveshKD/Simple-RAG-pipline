@@ -30,6 +30,12 @@ try:
     from PyPDF2 import PdfReader
 except ImportError:
     PdfReader = None
+
+try:
+    import fitz  # PyMuPDF is imported as fitz
+except ImportError:
+    fitz = None
+
 try:
     from pdf2image import convert_from_path
 except ImportError:
@@ -267,14 +273,10 @@ class PDFIngestor(BaseDocumentIngestor):
     Handles PDF files, with robust support for both text-based and scanned (image-based) PDFs.
     """
     def __init__(self, file_path: str, config: Dict[str, Any] = None):
-        """
-        Initializes the PDF ingestor.
-        """
         super().__init__(file_path, config)
-        # We don't need a use_ocr flag anymore; the logic will handle it automatically.
         self.ocr_language = self.config.get("ocr_language", "eng")
-        if PdfReader is None:
-            raise DocumentIngestionError("PyPDF2 library not found. It is required for all PDF processing.")
+        if fitz is None:
+            raise DocumentIngestionError("PyMuPDF library not found. Please install it.")
 
     def load_document(self) -> str:
         """
@@ -286,18 +288,17 @@ class PDFIngestor(BaseDocumentIngestor):
         try:
             # Attempt Direct Text Extraction
             logger.info(f"Attempting direct text extraction for PDF: {self.file_path}")
-            reader = PdfReader(self.file_path)
-            direct_text_content = []
-            for page in reader.pages:
-                extracted_text = page.extract_text()
-                if extracted_text:
-                    direct_text_content.append(extracted_text)
+            doc = fitz.open(self.file_path)
+            for page_num, page in enumerate(doc):
+                page_text = page.get_text().strip()
+                if page_text:
+                    all_text.append(page_text)
             
-            full_direct_text = "\n".join(direct_text_content).strip()
+            full_direct_text = "\n".join(all_text)
 
             # Check if Direct Extraction was Sufficient
             # If we got a reasonable amount of text, we can assume it's not a scanned document.
-            if full_direct_text and (len(full_direct_text) > 10 * len(reader.pages)):
+            if full_direct_text and (len(full_direct_text) > 10 * doc.page_count):
                 logger.info("Direct text extraction successful. Skipping OCR.")
                 return full_direct_text
 
@@ -338,20 +339,20 @@ class PDFIngestor(BaseDocumentIngestor):
             raise DocumentIngestionError(message=msg, details=str(e))
 
     def extract_metadata(self) -> Dict[str, Any]:
-        """Extracts metadata from the PDF file using PyPDF2."""
+        """Extracts metadata from the PDF file using PyMuPDF."""
         try:
-            reader = PdfReader(self.file_path)
-            pdf_info = reader.metadata or {}
+            doc = fitz.open(self.file_path)
             
-            # Create a new, standard Python dictionary from the PyPDF2 object.
-            clean_metadata = {key: str(value) for key, value in pdf_info.items()}
+            # PyMuPDF metadata is already a standard Python dictionary
+            clean_metadata = doc.metadata or {}
 
             # Add our custom metadata
             clean_metadata["filename"] = os.path.basename(self.file_path)
             clean_metadata["doc_id"] = os.path.splitext(os.path.basename(self.file_path))[0]
-            clean_metadata["page_count"] = len(reader.pages)
-            clean_metadata["source_type"] = "pdf" # Add the source type hint
+            clean_metadata["page_count"] = len(doc)
+            clean_metadata["source_type"] = "pdf"
             
+            doc.close()
             return clean_metadata
         except Exception as e:
             msg = f"Error extracting metadata from PDF file: {self.file_path}"

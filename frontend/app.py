@@ -12,6 +12,7 @@ BACKEND_BASE_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000").rstrip(
 DOCUMENTS_API_URL = f"{BACKEND_BASE_URL}/api/v1/documents"
 UPLOAD_API_URL = f"{DOCUMENTS_API_URL}/upload"
 QUERY_API_URL = f"{BACKEND_BASE_URL}/api/v1/query"
+CLEAR_API_URL = f"{DOCUMENTS_API_URL}/clear-all"
 
 # --- Page Setup ---
 st.set_page_config(
@@ -84,6 +85,41 @@ with st.sidebar:
     else:
         st.info("No documents have been processed yet.")
         
+
+    if processed_docs:
+        st.divider()
+        st.error("Danger Zone")
+        if "confirm_delete" not in st.session_state:
+            st.session_state.confirm_delete = False
+
+        if st.button("Clear Knowledge Base"):
+            st.session_state.confirm_delete = True
+        
+        if st.session_state.confirm_delete:
+            st.warning("Are you sure you want to delete all documents? This action cannot be undone.")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Yes, Delete All", type="primary"):
+                    with st.spinner("Clearing knowledge base..."):
+                        try:
+                            response = requests.delete(CLEAR_API_URL, timeout=30)
+                            if response.status_code == 200:
+                                st.success("Knowledge base cleared successfully.")
+                            else:
+                                error_detail = response.json().get("detail", response.text)
+                                st.error(f"Failed to clear knowledge base: {error_detail}")
+                            
+                            st.session_state.confirm_delete = False
+                            time.sleep(2)
+                            st.rerun()
+
+                        except requests.exceptions.RequestException as e:
+                            st.error(f"Connection error: {e}")
+            with col2:
+                if st.button("Cancel"):
+                    st.session_state.confirm_delete = False
+                    st.rerun()
+                
     st.divider()
     
     # Query parameters
