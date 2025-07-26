@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, validation_alias="PORT")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
+    #sqlite
+    database_url: str = Field(default="sqlite:///./chat_database.db", validation_alias='DATABASE_URL')
+
     #project metadata
     project_name: str = "Multi-Tenant Visual RAG Platform"
     api_v1_prefix: str = "/api/v1"

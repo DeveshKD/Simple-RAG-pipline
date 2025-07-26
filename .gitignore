@@ -3,4 +3,4 @@
 /tests/
 venv/
 data/
-todo.md
+chat_database.db
