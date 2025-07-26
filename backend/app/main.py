@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from .core.config import settings
 from .core.exceptions import VectorDBError
-from .api import documents_api, query_api
+from .api import documents_api, query_api, interactions_api
 from . import dependencies as deps
 from .database import engine
 from .models import db_models
@@ -65,8 +65,8 @@ app = FastAPI(
 
 # Include API Routers
 app.include_router(documents_api.router, prefix="/api/v1", tags=["Documents"])
-app.include_router(query_api.router, prefix="/api/v1", tags=["Query"])
-
+app.include_router(query_api.router, prefix="/api/v1", tags=["V1 Query"])
+app.include_router(interactions_api.router, prefix="/api/v2", tags=["V2 - Interactions (Stateful)"])
 
 # Root Endpoint
 @app.get("/", tags=["Root"])

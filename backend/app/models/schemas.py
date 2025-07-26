@@ -1,7 +1,8 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import List, Dict, Any, Optional
+import uuid
 
-# Request bodies
+#v1 schemas (some still required and some not)
 class SignupRequest(BaseModel):
     username: str
     email: EmailStr
@@ -11,7 +12,6 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
-# Token response
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -26,7 +26,6 @@ class DocumentMetadata(BaseModel):
     page_count: Optional[int] = None
     row_count: Optional[int] = None
     column_headers: Optional[List[str]] = None
-    # Add any other metadata fields that your ingestors might extract.
     chunk_number: Optional[int] = None
 
 
@@ -64,8 +63,6 @@ class QueryRequest(BaseModel):
     """
     query_text: str = Field(..., min_length=1, description="The natural language query from the user.")
     n_results: int = Field(default=5, ge=1, le=50, description="The number of relevant document chunks to retrieve for context.")
-    # In a stateful app, this would also include:
-    # chat_id: Optional[str] = None
 
 
 class QueryResponse(BaseModel):
@@ -84,3 +81,51 @@ class StatusResponse(BaseModel):
     """
     status: str
     message: Optional[str] = None
+
+# schemas for v2
+class InteractionRequest(BaseModel):
+    """
+    The request model for the unified interaction endpoint.
+    """
+    interaction_id: Optional[uuid.UUID] = Field(None, description="ID of a chat session to continue, or None for a new chat.")
+    query_text: str = Field(..., min_length=1, description="the user query")
+
+class InteractionResponse(BaseModel):
+    """
+    The response from the unified interaction endpoint, containing the AI's
+    answer and the ID of the interaction session.
+    """
+    interaction_id: uuid.UUID = Field(..., description="The ID of the chat session.")
+    synthesized_answer: str = Field(..., description="AI's response to the user's query.")
+
+class ChatMessage(BaseModel):
+    """
+    Represents a single message within a chat history.
+    """
+    role: str
+    content: str
+    timestamp: Optional[str] = None
+
+    class Config:
+        from_attributes = True 
+
+class InteractionInfo(BaseModel):
+    """
+    A summary of a single interaction, used for listing all past chats.
+    """
+    id: uuid.UUID
+    title: str
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+class InteractionHistory(InteractionInfo):
+    """
+
+    Represents the full details of a single interaction, including all messages.
+    """
+    messages: List[ChatMessage] = []
+
+    class Config:
+        from_attributes = True
