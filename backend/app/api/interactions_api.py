@@ -40,6 +40,10 @@ async def handle_interaction(
             if not interaction:
                 raise HTTPException(status_code=404, detail=f"Interaction with ID {interaction_id} not found.")
         
+        history_from_db = db.query(models.db_models.ChatMessage).filter(models.db_models.ChatMessage.chat_id == interaction_id).order_by(models.db_models.ChatMessage.timestamp).all()
+        # Format it into the simple dictionary list the service expects
+        chat_history_for_prompt = [{"role": msg.role, "content": msg.content} for msg in history_from_db]
+
         user_message = models.db_models.ChatMessage(
             chat_id=interaction_id,
             role="user",
@@ -48,12 +52,10 @@ async def handle_interaction(
         db.add(user_message)
         db.commit()
 
-        # refactor query processor to actually use chat history
-        chat_history = [] # adding it here so that i dont forget
         synthesized_answer = await qp_service.process_query(
             query_text=request.query_text,
             n_results=5,
-            # chat_history=chat_history (to be added)
+            chat_history= chat_history_for_prompt
         )
         
         assistant_message = models.db_models.ChatMessage(

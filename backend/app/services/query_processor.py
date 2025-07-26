@@ -1,5 +1,3 @@
-# In backend/app/services/query_processor.py
-
 import logging
 import asyncio
 from typing import List, Dict, Any
@@ -47,17 +45,42 @@ class QueryProcessorService:
             logger.error(f"Error generating query embedding: {e}", exc_info=True)
             raise LLMError("Failed to generate embedding for the user query.", details=str(e))
 
-    async def _synthesize_answer(self, query_text: str, context_chunks: List[str]) -> str:
-        if not self.chat_model: return "Error: Model not configured."
-        consolidated_context = "\n\n---\n\n".join(context_chunks)
-        prompt = f"""
-        User Query: "{query_text}"
-        Context:
-        ---
-        {consolidated_context}
-        ---
-        Your Task: Based ONLY on the provided Context, answer the User Query. Also explain over your answer in brief if u retireved the answer from the context. If the Context does not contain the answer, you MUST respond with the exact phrase: {LLM_NO_ANSWER_RESPONSE}
+    async def _synthesize_answer(self, query_text: str, context_chunks: List[str], chat_history: List[Dict[str, Any]]) -> str:
         """
+        Uses the LLM to generate an answer, now including conversation history in the prompt.
+        """
+        if not self.chat_model:
+            return "Error: The answer generation model is not properly configured."
+
+        # Format the chat history for the prompt
+        formatted_history = "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in chat_history])
+        
+        consolidated_context = "\n\n---\n\n".join(context_chunks)
+
+        prompt = f"""
+        You are a helpful and intelligent AI assistant. Your task is to answer the user's final question in a conversational and trustworthy manner, synthesizing information from two sources: the 'Chat History' and the 'Document Context'.
+
+        Here is the history of your current conversation:
+        --- CHAT HISTORY ---
+        {formatted_history}
+        --- END CHAT HISTORY ---
+
+        Here is the context retrieved from documents that is relevant to the user's latest question:
+        --- DOCUMENT CONTEXT ---
+        {consolidated_context}
+        --- END DOCUMENT CONTEXT ---
+
+        User's Final Question: "{query_text}"
+
+        Instructions for Answering:
+        1.  Carefully review both the 'Chat History' and the 'Document Context' to find the most relevant information to answer the "User's Final Question".
+        2.  **Prioritize the 'Chat History'**. If the user has provided a fact or correction in the history, treat it as the most current and accurate source of truth, even if it conflicts with the 'Document Context'.
+        3.  **Formulate a helpful, conversational response.** Do not just state a fact. For example, instead of just "The answer is X.", say something like "Based on the information you provided earlier, the answer is X". You can also explain more over the context if needed.
+        4.  **Cite your source clearly.** At the end of your answer, explicitly state whether the information came from the 'Chat History' or the provided 'Document Context'.
+        5.  If you use information from the 'Document Context', you do not need to cite the specific chunk, just mention the document.
+        6.  If NEITHER source contains the information needed to answer, you MUST respond with the exact, single phrase: {LLM_NO_ANSWER_RESPONSE}
+        """
+
         try:
             response = await self.chat_model.generate_content_async(prompt)
             return response.text.strip()
@@ -94,48 +117,37 @@ class QueryProcessorService:
             return "I'm sorry, I couldn't find an answer to your question."
 
 
-    async def process_query(self, query_text: str, n_results: int) -> str:
-        """Processes a query with intelligent, threshold-based retrieval."""
-        logger.info(f"Processing query with threshold-based retrieval: '{query_text}'")
+    async def process_query(self, query_text: str, n_results: int, chat_history: List[Dict[str, Any]]) -> str:
+        """
+        Processes a user query, now accepting and utilizing chat history.
+        """
+        logger.info(f"Processing query with chat history (length: {len(chat_history)}): '{query_text}'")
         try:
             query_embedding = await self._generate_query_embedding(query_text)
 
-            # FIX:
-            # 1. Query for more results than needed to get a good sample.
-            # We query for at least 10, or more if the user asks for more.
             query_for_count = max(10, n_results)
-            
-            # 2. Retrieve initial chunks
             initial_chunks_data = self.vector_db.query_documents(
                 query_embedding=query_embedding,
                 n_results=query_for_count
             )
 
-            if not initial_chunks_data:
-                logger.info("Vector DB is empty or returned no results. True retrieval failure.")
-                return await self._generate_helpful_failure_response("retrieval_failure", query_text)
-
-            # 3. Filter the results based on the relevance threshold
             truly_relevant_chunks = [
                 chunk for chunk in initial_chunks_data 
                 if chunk.get("distance") is not None and chunk["distance"] < RELEVANCE_THRESHOLD
             ]
             logger.info(f"Retrieved {len(initial_chunks_data)} chunks, {len(truly_relevant_chunks)} survived relevance threshold of < {RELEVANCE_THRESHOLD}.")
 
-            # Retrieval Failure
             if not truly_relevant_chunks:
                 logger.info("Stage 1 Failure: No chunks met the relevance threshold.")
                 return await self._generate_helpful_failure_response("retrieval_failure", query_text)
 
-            # 4. Take the top N of the *relevant* chunks
             context_chunks_for_llm = truly_relevant_chunks[:n_results]
             context_chunks_text = [chunk['text_chunk'] for chunk in context_chunks_for_llm]
             
-            llm_response = await self._synthesize_answer(query_text, context_chunks_text)
+            llm_response = await self._synthesize_answer(query_text, context_chunks_text, chat_history)
 
-            # Synthesis Failure
             if llm_response == LLM_NO_ANSWER_RESPONSE:
-                logger.info("Stage 2 Failure: LLM found no answer in the relevant context.")
+                logger.info("Stage 2 Failure: LLM found no answer in the retrieved context.")
                 return await self._generate_helpful_failure_response("synthesis_failure", query_text)
 
             logger.info("Successfully generated a synthesized answer.")
