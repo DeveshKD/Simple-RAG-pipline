@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_serializer
 from typing import List, Dict, Any, Optional
 import uuid
 
@@ -102,6 +102,7 @@ class ChatMessage(BaseModel):
     """
     Represents a single message within a chat history.
     """
+    id : uuid.UUID
     role: str
     content: str
     timestamp: Optional[str] = None
@@ -116,7 +117,6 @@ class InteractionInfo(BaseModel):
     id: uuid.UUID
     title: str
     created_at: str
-
     class Config:
         from_attributes = True
 

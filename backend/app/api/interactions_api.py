@@ -81,7 +81,16 @@ async def handle_interaction(
 async def list_interactions(db: Session = Depends(get_db)):
     """Lists all past chat sessions, newest first."""
     interactions = db.query(models.db_models.ChatSession).order_by(models.db_models.ChatSession.created_at.desc()).all()
-    return interactions
+    response_data = []
+    for interaction in interactions:
+        response_data.append(
+            models.schemas.InteractionInfo(
+                id=interaction.id,
+                title=interaction.title,
+                created_at=interaction.created_at.isoformat() # Convert datetime to string here
+            )
+        )
+    return response_data
 
 
 @router.get("/interaction/{interaction_id}", response_model=models.schemas.InteractionHistory)
@@ -90,7 +99,20 @@ async def get_interaction_history(interaction_id: uuid.UUID, db: Session = Depen
     interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
     if not interaction:
         raise HTTPException(status_code=404, detail="Interaction not found.")
-    return interaction
+    response_data = models.schemas.InteractionHistory(
+        id=interaction.id,
+        title=interaction.title,
+        created_at=interaction.created_at.isoformat(),
+        messages=[
+            models.schemas.ChatMessage(
+                id=msg.id,
+                role=msg.role,
+                content=msg.content,
+                timestamp=msg.timestamp.isoformat()
+            ) for msg in interaction.messages
+        ]
+    )
+    return response_data
 
 
 @router.delete("/interaction/{interaction_id}", response_model=models.schemas.StatusResponse)

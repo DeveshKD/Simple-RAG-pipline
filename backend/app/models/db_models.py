@@ -1,3 +1,4 @@
+import uuid
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Uuid
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -6,7 +7,7 @@ from ..database import Base
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
-    id = Column(Uuid, primary_key=True, index=True)
+    id = Column(Uuid, primary_key=True, default = uuid.uuid4)
     title = Column(String, default="New Chat")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
@@ -16,7 +17,7 @@ class ChatSession(Base):
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
-    id = Column(Uuid, primary_key=True, index=True)
+    id = Column(Uuid, primary_key=True, default = uuid.uuid4)
     chat_id = Column(Uuid, ForeignKey("chat_sessions.id"), nullable=False)
     role = Column(String, nullable=False)  # 'user' or 'assistant'
     content = Column(Text, nullable=False)
