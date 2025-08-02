@@ -3,6 +3,14 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 import uuid
+from .. import models
+from ..database import get_db
+from ..core.exceptions import LLMError, QueryProcessingError
+from ..dependencies import get_query_processor_serv
+from ..services.query_processor import QueryProcessorService
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
 
 from .. import models
 from ..database import get_db
@@ -19,50 +27,40 @@ async def handle_interaction(
     db: Session = Depends(get_db),
     qp_service: QueryProcessorService = Depends(get_query_processor_serv)
 ):
-    """
-    The unified endpoint for handling a conversation turn.
-    - If interaction_id is null, a new chat session is created.
-    - If interaction_id is provided, it continues the existing chat.
-    """
     try:
         interaction_id = request.interaction_id
+        chat_history_for_prompt = []
         
         if interaction_id is None:
-            logger.info("No interaction_id provided. Creating a new chat session.")
             new_interaction = models.db_models.ChatSession(title=request.query_text[:75])
             db.add(new_interaction)
             db.commit()
             db.refresh(new_interaction)
             interaction_id = new_interaction.id
+            interaction = new_interaction 
         else:
-            logger.info(f"Query for an existing chat: {interaction_id}")
             interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
             if not interaction:
                 raise HTTPException(status_code=404, detail=f"Interaction with ID {interaction_id} not found.")
-        
-        history_from_db = db.query(models.db_models.ChatMessage).filter(models.db_models.ChatMessage.chat_id == interaction_id).order_by(models.db_models.ChatMessage.timestamp).all()
-        # Format it into the simple dictionary list the service expects
-        chat_history_for_prompt = [{"role": msg.role, "content": msg.content} for msg in history_from_db]
+            
+            history_from_db = interaction.messages
+            chat_history_for_prompt = [{"role": msg.role, "content": msg.content} for msg in history_from_db]
 
-        user_message = models.db_models.ChatMessage(
-            chat_id=interaction_id,
-            role="user",
-            content=request.query_text
-        )
+        user_message = models.db_models.ChatMessage(chat_id=interaction_id, role="user", content=request.query_text)
         db.add(user_message)
         db.commit()
 
+        allowed_doc_ids = [str(doc.id) for doc in interaction.documents]
+        logger.info(f"Query for interaction '{interaction_id}' will be scoped to {len(allowed_doc_ids)} documents.")
+        
         synthesized_answer = await qp_service.process_query(
             query_text=request.query_text,
             n_results=5,
-            chat_history= chat_history_for_prompt
+            chat_history=chat_history_for_prompt,
+            allowed_doc_ids=allowed_doc_ids
         )
         
-        assistant_message = models.db_models.ChatMessage(
-            chat_id=interaction_id,
-            role="assistant",
-            content=synthesized_answer
-        )
+        assistant_message = models.db_models.ChatMessage(chat_id=interaction_id, role="assistant", content=synthesized_answer)
         db.add(assistant_message)
         db.commit()
 
@@ -73,7 +71,7 @@ async def handle_interaction(
     except (QueryProcessingError, LLMError) as e:
         raise HTTPException(status_code=503, detail=e.message)
     except Exception as e:
-        logger.error(f"An unexpected error occurred in handle_interaction: {e}", exc_info=True)
+        logger.error(f"An unexpected error in handle_interaction: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected server error occurred.")
 
 

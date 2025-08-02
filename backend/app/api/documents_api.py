@@ -1,10 +1,14 @@
 import logging
 import os
 import shutil
+import uuid
+from typing import List
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
+from sqlalchemy.orm import Session
 
 from .. import models
-from ..core.exceptions import DocumentIngestionError, DocumentProcessingError, VectorDBError
+from ..database import get_db
+from ..core.exceptions import DocumentIngestionError, DocumentProcessingError, VectorDBError, LLMError
 from ..dependencies import (
     get_ingestor_factory_serv,
     get_doc_processor_serv,
@@ -17,98 +21,86 @@ from ..services.vector_db_service import VectorDBService
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Define a directory to temporarily store uploads. In a real production
-# system, this would be a more robust solution like S3.
-UPLOAD_DIRECTORY = "./backend/data/uploads"
+UPLOAD_DIRECTORY = "./temp_uploads"
 os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
 
-@router.post("/documents/upload", response_model=models.schemas.DocumentUploadResponse)
-async def upload_document(
+@router.post("/documents/upload/{interaction_id}", response_model=models.schemas.DocumentUploadResponse)
+async def upload_document_to_interaction(
+    interaction_id: uuid.UUID,
     file: UploadFile = File(...),
+    db: Session = Depends(get_db),
     ingestor_factory: DocumentIngestorFactory = Depends(get_ingestor_factory_serv),
     doc_processor: DocumentProcessorService = Depends(get_doc_processor_serv),
     vector_db: VectorDBService = Depends(get_vector_db_serv),
 ):
     """
-    Handles the end-to-end processing of a single uploaded file.
-    1. Saves the file temporarily.
-    2. Ingests raw text and metadata using the appropriate ingestor.
-    3. Processes the raw data (cleans, chunks, embeds).
-    4. Adds the final processed chunks to the vector database.
+    Uploads a document and associates it with a specific interaction session.
     """
-    temp_file_path = os.path.join(UPLOAD_DIRECTORY, file.filename)
+    interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
+    if not interaction:
+        raise HTTPException(status_code=404, detail=f"Interaction with ID {interaction_id} not found.")
 
+    temp_file_path = os.path.join(UPLOAD_DIRECTORY, file.filename)
     try:
-        # Save the uploaded file to a temporary path
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        logger.info(f"File '{file.filename}' temporarily saved to '{temp_file_path}'.")
-
-        # --- The RAG Ingestion Pipeline ---
-        # 1. Ingest
+        
         ingestor = ingestor_factory.create_ingestor(temp_file_path)
-        raw_doc = ingestor.ingest_document()
-
-        # 2. Process
-        # The processor expects a list of documents
-        processed_chunks = await doc_processor.process_documents([raw_doc])
-
-        # 3. Store
-        if processed_chunks:
-            vector_db.add_documents(processed_chunks)
-        else:
-            logger.warning(f"No processable chunks were generated for file '{file.filename}'.")
-            
-        return models.schemas.DocumentUploadResponse(
-            message="File processed successfully.",
+        raw_doc = ingestor.ingest_document() 
+        
+        new_document_record = models.db_models.Document(
             filename=file.filename,
-            doc_id=raw_doc["doc_id"],
+            source_type=raw_doc["metadata"].get("source_type")
+        )
+        db.add(new_document_record)
+        db.commit()
+        db.refresh(new_document_record)
+        
+        doc_id_for_chroma = str(new_document_record.id)
+        raw_doc["doc_id"] = doc_id_for_chroma 
+
+        processed_chunks = await doc_processor.process_documents([raw_doc])
+        if not processed_chunks:
+            raise HTTPException(status_code=422, detail="Failed to process document. No chunks were generated.")
+        
+
+        vector_db.add_documents(processed_chunks)
+
+        interaction.documents.append(new_document_record)
+        db.commit()
+
+        logger.info(f"Successfully processed and linked document '{file.filename}' to interaction '{interaction_id}'.")
+        
+        return models.schemas.DocumentUploadResponse(
+            message="File processed and linked to the interaction.",
+            filename=file.filename,
+            doc_id=doc_id_for_chroma,
             chunks_added=len(processed_chunks)
         )
-    except ValueError as e: # Catches unsupported file types from the factory
-        logger.error(f"Unsupported file type for '{file.filename}': {e}")
-        raise HTTPException(status_code=415, detail=f"Unsupported file type: {str(e)}")
-    except (DocumentIngestionError, DocumentProcessingError, VectorDBError) as e:
-        logger.error(f"Error processing file '{file.filename}': {e.message}", exc_info=True)
-        raise HTTPException(status_code=500, detail=e.message)
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during file upload: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected server error occurred.")
+    except (DocumentIngestionError, DocumentProcessingError, VectorDBError, LLMError) as e:
+        raise HTTPException(status_code=500, detail=f"A server error occurred: {e.message}")
     finally:
-        # Clean up the temporary file
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-        logger.info(f"Temporary file '{temp_file_path}' removed.")
 
-
-@router.get("/documents", response_model=models.schemas.ListDocumentsResponse)
-async def list_documents(vector_db: VectorDBService = Depends(get_vector_db_serv)):
+@router.get("/documents", response_model=List[models.schemas.DocumentInfo])
+async def list_all_documents(db: Session = Depends(get_db)):
     """
-    Retrieves a list of all unique documents that have been ingested.
-    It does this by querying all chunks and de-duplicating by doc_id.
+    Retrieves a list of all unique documents in the system's library.
+    This is not session-specific.
     """
-    try:
-        all_chunks = vector_db.get_all_documents()
-        
-        unique_docs = {}
-        for chunk in all_chunks:
-            metadata = chunk.get("metadata", {})
-            doc_id = metadata.get("doc_id")
-            if doc_id and doc_id not in unique_docs:
-                unique_docs[doc_id] = models.schemas.DocumentInfo(
-                    doc_id=doc_id,
-                    filename=metadata.get("filename"),
-                    source_type=metadata.get("source_type")
-                )
-        
-        doc_list = list(unique_docs.values())
-        return models.schemas.ListDocumentsResponse(
-            total_documents=len(doc_list),
-            documents=doc_list
+    documents_from_db = db.query(models.db_models.Document).order_by(models.db_models.Document.created_at.desc()).all()
+    response_data = []
+    for doc in documents_from_db:
+        response_data.append(
+            models.schemas.DocumentInfo(
+                doc_id=str(doc.id),
+                filename=doc.filename,
+                source_type=doc.source_type,
+                created_at=doc.created_at.isoformat()
+            )
         )
-    except VectorDBError as e:
-        logger.error(f"Failed to list documents from VectorDB: {e.message}", exc_info=True)
-        raise HTTPException(status_code=500, detail=e.message)
+    return response_data
     
 @router.delete("/documents/clear-all", response_model=models.schemas.StatusResponse)
 async def clear_all_documents(vector_db: VectorDBService = Depends(get_vector_db_serv)):

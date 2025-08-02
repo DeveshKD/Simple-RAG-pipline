@@ -46,6 +46,15 @@ class DocumentInfo(BaseModel):
     doc_id: str = Field(..., description="The unique document ID.")
     filename: Optional[str] = Field(None, description="The original filename of the document.")
     source_type: Optional[str] = Field(None, description="The type of the source file, e.g., 'pdf', 'csv'.")
+    created_at: str
+
+    class Config:
+        from_attributes = True
+
+    @field_serializer('created_at')
+    def serialize_dt(self, dt: Any, _info):
+        if isinstance(dt, str): return dt
+        return dt.isoformat()
 
 
 class ListDocumentsResponse(BaseModel):
@@ -117,6 +126,7 @@ class InteractionInfo(BaseModel):
     id: uuid.UUID
     title: str
     created_at: str
+    documents: List[DocumentInfo] = []
     class Config:
         from_attributes = True
 

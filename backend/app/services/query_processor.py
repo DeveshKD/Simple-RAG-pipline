@@ -117,32 +117,40 @@ class QueryProcessorService:
             return "I'm sorry, I couldn't find an answer to your question."
 
 
-    async def process_query(self, query_text: str, n_results: int, chat_history: List[Dict[str, Any]]) -> str:
+    async def process_query(
+        self,
+        query_text: str,
+        n_results: int,
+        chat_history: List[Dict[str, Any]],
+        allowed_doc_ids: List[str]
+    ) -> str:
         """
-        Processes a user query, now accepting and utilizing chat history.
+        Processes a query with a simplified and direct retrieval logic.
         """
-        logger.info(f"Processing query with chat history (length: {len(chat_history)}): '{query_text}'")
+        logger.info(f"Processing query with history (len: {len(chat_history)}) and {len(allowed_doc_ids)} allowed docs: '{query_text}'")
         try:
             query_embedding = await self._generate_query_embedding(query_text)
 
-            query_for_count = max(10, n_results)
-            initial_chunks_data = self.vector_db.query_documents(
+            relevant_chunks = self.vector_db.query_documents(
                 query_embedding=query_embedding,
-                n_results=query_for_count
+                n_results=n_results,
+                allowed_doc_ids=allowed_doc_ids
             )
 
-            truly_relevant_chunks = [
-                chunk for chunk in initial_chunks_data 
+            filtered_by_threshold = [
+                chunk for chunk in relevant_chunks
                 if chunk.get("distance") is not None and chunk["distance"] < RELEVANCE_THRESHOLD
             ]
-            logger.info(f"Retrieved {len(initial_chunks_data)} chunks, {len(truly_relevant_chunks)} survived relevance threshold of < {RELEVANCE_THRESHOLD}.")
+            
+            logger.info(f"Retrieved {len(relevant_chunks)} chunks initially, {len(filtered_by_threshold)} survived relevance threshold of < {RELEVANCE_THRESHOLD}.")
 
-            if not truly_relevant_chunks:
+
+            # --- Stage 1 Check (True Retrieval Failure) ---
+            if not filtered_by_threshold:
                 logger.info("Stage 1 Failure: No chunks met the relevance threshold.")
                 return await self._generate_helpful_failure_response("retrieval_failure", query_text)
 
-            context_chunks_for_llm = truly_relevant_chunks[:n_results]
-            context_chunks_text = [chunk['text_chunk'] for chunk in context_chunks_for_llm]
+            context_chunks_text = [chunk['text_chunk'] for chunk in filtered_by_threshold]
             
             llm_response = await self._synthesize_answer(query_text, context_chunks_text, chat_history)
 
