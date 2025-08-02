@@ -9,9 +9,9 @@ from ..services.query_processor import QueryProcessorService
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-@router.post("/query", response_model=models.schemas.QueryResponse)
+@router.post("/query", response_model=models.schemas.InteractionQueryResponse)
 async def handle_query(
-    request: models.schemas.QueryRequest,
+    request: models.schemas.InteractionQueryRequest,
     qp_service: QueryProcessorService = Depends(get_query_processor_serv),
 ):
     """

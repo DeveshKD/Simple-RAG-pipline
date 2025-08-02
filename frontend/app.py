@@ -2,29 +2,26 @@ import streamlit as st
 import requests
 import os
 import time
+import uuid
 
 # --- Configuration ---
-# Use an environment variable for the backend URL in production,
-# with a fallback to localhost for easy local development.
 BACKEND_BASE_URL = os.getenv("BACKEND_API_URL", "http://localhost:8000").rstrip("/")
 
-# Define the full API endpoint URLs
+# V1 Endpoints (for document management)
 DOCUMENTS_API_URL = f"{BACKEND_BASE_URL}/api/v1/documents"
 UPLOAD_API_URL = f"{DOCUMENTS_API_URL}/upload"
-QUERY_API_URL = f"{BACKEND_BASE_URL}/api/v1/query"
 CLEAR_API_URL = f"{DOCUMENTS_API_URL}/clear-all"
 
-# --- Page Setup ---
-st.set_page_config(
-    page_title="RAG Application",
-    layout="wide"
-)
+# V2 Endpoints (for stateful chat)
+INTERACTIONS_V2_API_URL = f"{BACKEND_BASE_URL}/api/v2/interactions"
+INTERACTION_V2_API_URL = f"{BACKEND_BASE_URL}/api/v2/interaction"
 
-st.title("RAG application Phase I")
-st.markdown("Upload documents and ask questions based on their content.")
+# --- Page Setup ---
+st.set_page_config(page_title="RAG Application - Phase II", layout="wide")
+st.title("RAG Application Phase II")
+st.markdown("A stateful RAG application with conversational memory.")
 
 # Helper Functions
-
 def get_processed_documents():
     """Fetches the list of documents currently in the vector store."""
     try:
@@ -35,19 +32,50 @@ def get_processed_documents():
         st.sidebar.error(f"Failed to connect to backend: {e}")
         return []
 
-# Sidebar
+def get_all_interactions():
+    """Fetches the list of all past chat sessions."""
+    try:
+        response = requests.get(INTERACTIONS_V2_API_URL, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.sidebar.error(f"Connection error: {e}")
+        return []
 
+def get_interaction_messages(interaction_id: str):
+    """Fetches the full history for a specific chat."""
+    try:
+        response = requests.get(f"{INTERACTION_V2_API_URL}/{interaction_id}", timeout=10)
+        response.raise_for_status()
+        return response.json().get("messages", [])
+    except requests.exceptions.RequestException as e:
+        st.error(f"Failed to load chat: {e}")
+        return []
+
+def start_new_interaction():
+    """Resets the session state to start a new chat."""
+    st.session_state.messages = []
+    st.session_state.interaction_id = None
+    st.rerun()
+
+# --- Initialize Session State ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "interaction_id" not in st.session_state:
+    st.session_state.interaction_id = None
+
+# Sidebar
 with st.sidebar:
     st.header("Controls")
     
-    # File Uploader
-    uploaded_files = st.file_uploader(
-        "Upload Documents",
-        type=["txt", "pdf", "csv", "docx", "md"], # Add more types as your ingestors support them
-        accept_multiple_files=True,
-        help="Upload one or more documents to be added to the knowledge base."
-    )
+    if st.button("New Chat", use_container_width=True):
+        start_new_interaction()
 
+    st.divider()
+    
+    # Document Management (remains the same as Phase I)
+    st.header("Document Management")
+    uploaded_files = st.file_uploader("Upload Documents", accept_multiple_files=True)
     if uploaded_files:
         if st.button("Process Uploaded Files"):
             # Process each file one by one
@@ -55,7 +83,7 @@ with st.sidebar:
                 with st.spinner(f"Processing '{uploaded_file.name}'..."):
                     try:
                         files = {'file': (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
-                        response = requests.post(UPLOAD_API_URL, files=files, timeout=300) # Long timeout for processing
+                        response = requests.post(UPLOAD_API_URL, files=files, timeout=300)
                         
                         if response.status_code == 200:
                             st.success(f"Successfully processed '{uploaded_file.name}'")
@@ -69,13 +97,9 @@ with st.sidebar:
             
             # A small delay to allow the user to see the final status message
             time.sleep(2)
-            # Rerun to refresh the document list automatically
             st.rerun()
 
-    st.divider()
-
-    # Display list of processed documents
-    st.header("Knowledge Base")
+    st.header("Existing Documents")
     processed_docs = get_processed_documents()
 
     if processed_docs:
@@ -84,10 +108,8 @@ with st.sidebar:
             st.markdown(f"- `{doc.get('filename', doc.get('doc_id'))}`")
     else:
         st.info("No documents have been processed yet.")
-        
-
+    
     if processed_docs:
-        st.divider()
         st.error("Danger Zone")
         if "confirm_delete" not in st.session_state:
             st.session_state.confirm_delete = False
@@ -119,36 +141,33 @@ with st.sidebar:
                 if st.button("Cancel"):
                     st.session_state.confirm_delete = False
                     st.rerun()
-                
     st.divider()
     
-    # Query parameters
-    st.header("Query Settings")
-    n_results = st.slider(
-        "Number of chunks for context:",
-        min_value=1,
-        max_value=20,
-        value=5,
-        step=1,
-        help="How many relevant text chunks to retrieve from the documents to form the context for answering the question."
-    )
+    # Chat History
+    st.header("Chat History")
+    interactions = get_all_interactions()
+    if interactions:
+        for interaction in interactions:
+            if st.button(interaction['title'], key=interaction['id'], use_container_width=True):
+                # Load the selected chat
+                st.session_state.interaction_id = interaction['id']
+                messages_from_db = get_interaction_messages(interaction['id'])
+                st.session_state.messages = messages_from_db
+                st.rerun()
+    else:
+        st.info("No past conversations found.")
 
-# Main Content Area for Q&A
-
-st.header("Ask a Question")
-
-# Initialize chat history in session state
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Main chat area
+st.header(f"Chat Session: {st.session_state.interaction_id or 'New Chat'}")
 
 # Display prior chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Main input for user query
+# user query input
 if prompt := st.chat_input("What would you like to know?"):
-    # Add user message to chat history and display it
+    # Add user message to session state and display it
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -158,22 +177,27 @@ if prompt := st.chat_input("What would you like to know?"):
         with st.spinner("Thinking..."):
             try:
                 payload = {
-                    "query_text": prompt,
-                    "n_results": n_results
+                    "interaction_id": st.session_state.interaction_id,
+                    "query_text": prompt
                 }
-                response = requests.post(QUERY_API_URL, json=payload, timeout=120)
+                response = requests.post(INTERACTION_V2_API_URL, json=payload, timeout=120)
+                response.raise_for_status()
+                
+                data = response.json()
+                answer = data.get("synthesized_answer")
+                new_interaction_id = data.get("interaction_id")
 
-                if response.status_code == 200:
-                    answer = response.json().get("synthesized_answer", "No answer found.")
-                    st.markdown(answer)
-                    # Add AI response to chat history
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
-                else:
-                    error_detail = response.json().get("detail", "An unknown error occurred.")
-                    st.error(f"Error from backend: {error_detail}")
-                    st.session_state.messages.append({"role": "assistant", "content": f"Error: {error_detail}"})
+                if st.session_state.interaction_id is None and new_interaction_id:
+                    st.session_state.interaction_id = new_interaction_id
+                    # rerun to update the "Chat Session" header and history list
+                    # For a smoother experience just update the header manually first
+                    st.rerun() 
+                
+                st.markdown(answer)
+                st.session_state.messages.append({"role": "assistant", "content": answer})
 
+            except requests.exceptions.HTTPError as e:
+                error_detail = e.response.json().get("detail", e.response.text)
+                st.error(f"Error from backend: {error_detail}")
             except requests.exceptions.RequestException as e:
-                error_message = f"Failed to get a response from the backend: {e}"
-                st.error(error_message)
-                st.session_state.messages.append({"role": "assistant", "content": error_message})
+                st.error(f"Connection error: {e}")
