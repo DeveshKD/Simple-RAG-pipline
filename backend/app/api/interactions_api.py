@@ -1,79 +1,140 @@
 import logging
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+import os
+import shutil
 import uuid
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
+from sqlalchemy.orm import Session
+
 from .. import models
 from ..database import get_db
-from ..core.exceptions import LLMError, QueryProcessingError
-from ..dependencies import get_query_processor_serv
+from ..core.exceptions import DocumentIngestionError, DocumentProcessingError, VectorDBError, LLMError
+from ..dependencies import (
+    get_ingestor_factory_serv,
+    get_doc_processor_serv,
+    get_vector_db_serv,
+    get_query_processor_serv
+)
+from ..services.document_ingestor import DocumentIngestorFactory
+from ..services.document_processor import DocumentProcessorService
+from ..services.vector_db_service import VectorDBService
 from ..services.query_processor import QueryProcessorService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-from .. import models
-from ..database import get_db
-from ..core.exceptions import LLMError, QueryProcessingError
-from ..dependencies import get_query_processor_serv
-from ..services.query_processor import QueryProcessorService
+UPLOAD_DIRECTORY = "./temp_uploads"
+os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
 
-logger = logging.getLogger(__name__)
-router = APIRouter()
+@router.post("/interactions/with-document", response_model=models.schemas.DocumentUploadResponse)
+async def create_or_update_interaction_with_document(
+    interaction_id: Optional[uuid.UUID] = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    ingestor_factory: DocumentIngestorFactory = Depends(get_ingestor_factory_serv),
+    doc_processor: DocumentProcessorService = Depends(get_doc_processor_serv),
+    vector_db: VectorDBService = Depends(get_vector_db_serv),
+):
+    """
+    The primary endpoint to add knowledge.
+    - If interaction_id is NOT provided, it creates a NEW interaction.
+    - If interaction_id IS provided, it adds the document to that existing interaction.
+    """
+    interaction = None
+    if interaction_id is None:
+        logger.info(f"No interaction_id provided. Creating a new interaction based on file: {file.filename}")
+        interaction = models.db_models.ChatSession(title=file.filename)
+        db.add(interaction)
+        db.commit()
+        db.refresh(interaction)
+    else:
+        logger.info(f"Adding document '{file.filename}' to existing interaction '{interaction_id}'")
+        interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
+        if not interaction:
+            raise HTTPException(status_code=404, detail="Interaction not found.")
 
-@router.post("/interaction", response_model=models.schemas.InteractionResponse)
-async def handle_interaction(
-    request: models.schemas.InteractionRequest,
+    temp_file_path = os.path.join(UPLOAD_DIRECTORY, file.filename)
+    try:
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        raw_doc = ingestor_factory.create_ingestor(temp_file_path).ingest_document()
+        
+        new_document_record = models.db_models.Document(filename=file.filename, source_type=raw_doc["metadata"].get("source_type"))
+        db.add(new_document_record)
+        db.commit()
+        db.refresh(new_document_record)
+        
+        doc_id_for_chroma = str(new_document_record.id)
+        raw_doc["doc_id"] = doc_id_for_chroma
+
+        processed_chunks = await doc_processor.process_documents([raw_doc])
+        if not processed_chunks:
+            raise HTTPException(status_code=422, detail="Failed to process document. No chunks were generated.")
+        
+        vector_db.add_documents(processed_chunks)
+        interaction.documents.append(new_document_record)
+        db.commit()
+        db.refresh(interaction)
+        
+        document_info_for_response = models.schemas.DocumentInfo(
+            id=new_document_record.id,
+            filename=new_document_record.filename,
+            source_type=new_document_record.source_type,
+            created_at=new_document_record.created_at.isoformat()
+        )
+
+        return models.schemas.DocumentUploadResponse(
+            interaction_id=interaction.id,
+            document=models.schemas.DocumentInfo.from_orm(document_info_for_response)
+        )
+    except (DocumentIngestionError, DocumentProcessingError, VectorDBError, LLMError) as e:
+        raise HTTPException(status_code=500, detail=f"A server error occurred: {e.message}")
+    finally:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+
+@router.post("/interactions/{interaction_id}/query", response_model=models.schemas.InteractionQueryResponse)
+async def handle_query(
+    interaction_id: uuid.UUID,
+    request: models.schemas.InteractionQueryRequest,
     db: Session = Depends(get_db),
     qp_service: QueryProcessorService = Depends(get_query_processor_serv)
 ):
-    try:
-        interaction_id = request.interaction_id
-        chat_history_for_prompt = []
-        
-        if interaction_id is None:
-            new_interaction = models.db_models.ChatSession(title=request.query_text[:75])
-            db.add(new_interaction)
-            db.commit()
-            db.refresh(new_interaction)
-            interaction_id = new_interaction.id
-            interaction = new_interaction 
-        else:
-            interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
-            if not interaction:
-                raise HTTPException(status_code=404, detail=f"Interaction with ID {interaction_id} not found.")
-            
-            history_from_db = interaction.messages
-            chat_history_for_prompt = [{"role": msg.role, "content": msg.content} for msg in history_from_db]
+    """Handles a user's message within a specific interaction."""
+    interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
+    if not interaction:
+        raise HTTPException(status_code=404, detail="Interaction not found.")
+    
+    # First message in a new chat? Add a system message.
+    if not interaction.messages:
+        system_content = f"Document '{interaction.documents[0].filename}' has been processed. You can now ask questions about its content."
+        system_message = models.db_models.ChatMessage(chat_id=interaction_id, role="assistant", content=system_content)
+        db.add(system_message)
 
-        user_message = models.db_models.ChatMessage(chat_id=interaction_id, role="user", content=request.query_text)
-        db.add(user_message)
-        db.commit()
+    user_message = models.db_models.ChatMessage(chat_id=interaction_id, role="user", content=request.query_text)
+    db.add(user_message)
+    db.commit()
+    db.refresh(interaction)
 
-        allowed_doc_ids = [str(doc.id) for doc in interaction.documents]
-        logger.info(f"Query for interaction '{interaction_id}' will be scoped to {len(allowed_doc_ids)} documents.")
-        
-        synthesized_answer = await qp_service.process_query(
-            query_text=request.query_text,
-            n_results=5,
-            chat_history=chat_history_for_prompt,
-            allowed_doc_ids=allowed_doc_ids
+    allowed_doc_ids = [str(doc.id) for doc in interaction.documents]
+    chat_history_for_prompt = [{"role": msg.role, "content": msg.content} for msg in interaction.messages]
+    
+    synthesized_answer = await qp_service.process_query(
+        query_text=request.query_text,
+        n_results=5,
+        chat_history=chat_history_for_prompt,
+        allowed_doc_ids=allowed_doc_ids
+    )
+    
+    assistant_message = models.db_models.ChatMessage(chat_id=interaction_id, role="assistant", content=synthesized_answer)
+    db.add(assistant_message)
+    db.commit()
+
+    return models.schemas.InteractionQueryResponse(
+        interaction_id=interaction.id,
+        synthesized_answer=synthesized_answer
         )
-        
-        assistant_message = models.db_models.ChatMessage(chat_id=interaction_id, role="assistant", content=synthesized_answer)
-        db.add(assistant_message)
-        db.commit()
-
-        return models.schemas.InteractionResponse(
-            interaction_id=interaction_id,
-            synthesized_answer=synthesized_answer
-        )
-    except (QueryProcessingError, LLMError) as e:
-        raise HTTPException(status_code=503, detail=e.message)
-    except Exception as e:
-        logger.error(f"An unexpected error in handle_interaction: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected server error occurred.")
-
 
 @router.get("/interactions", response_model=List[models.schemas.InteractionInfo])
 async def list_interactions(db: Session = Depends(get_db)):

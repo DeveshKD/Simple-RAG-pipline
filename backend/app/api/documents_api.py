@@ -94,7 +94,7 @@ async def list_all_documents(db: Session = Depends(get_db)):
     for doc in documents_from_db:
         response_data.append(
             models.schemas.DocumentInfo(
-                doc_id=str(doc.id),
+                id=str(doc.id),
                 filename=doc.filename,
                 source_type=doc.source_type,
                 created_at=doc.created_at.isoformat()
