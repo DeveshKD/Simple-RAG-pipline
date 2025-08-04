@@ -195,6 +195,35 @@ class VectorDBService:
         except Exception as e:
             logger.error(f"Error clearing collection '{self.collection_name}': {e}", exc_info=True)
             raise VectorDBError(message=f"Error clearing collection '{self.collection_name}'.", details=str(e))
+    
+    def delete_documents(self, doc_id: str):
+        """
+        Deletes all chunks associated with a specific document ID from the collection.
+
+        Args:
+            doc_id (str): The unique ID of the document whose chunks should be deleted.
+
+        Raises:
+            VectorDBError: If the collection is not available or if the delete
+                           operation fails.
+        """
+        if not self.collection:
+            logger.error("ChromaDB collection is not available. Cannot delete documents.")
+            raise VectorDBError(message="ChromaDB collection is not initialized.")
+
+        try:
+            # The 'where' filter is used to specify which documents to delete.
+            # We are deleting all chunks where the metadata 'doc_id' matches.
+            self.collection.delete(where={"doc_id": doc_id})
+            logger.info(f"Successfully deleted all chunks for doc_id '{doc_id}' from ChromaDB.")
+            logger.info(f"Total items in collection now: {self.collection.count()}")
+
+        except Exception as e:
+            logger.error(f"Error deleting documents for doc_id '{doc_id}' from ChromaDB: {e}", exc_info=True)
+            raise VectorDBError(
+                message=f"Error deleting documents for doc_id '{doc_id}' from ChromaDB.",
+                details=str(e)
+            )
 
     def get_all_documents(self, include_embeddings: bool = False) -> List[Dict[str, Any]]:
         """

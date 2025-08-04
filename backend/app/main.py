@@ -64,7 +64,7 @@ app = FastAPI(
 )
 
 # Include API Routers
-app.include_router(documents_api.router, prefix="/api/v1", tags=["Documents"])
+app.include_router(documents_api.router, prefix="/api/v2", tags=["Documents"])
 # app.include_router(query_api.router, prefix="/api/v1", tags=["V1 Query"])
 app.include_router(interactions_api.router, prefix="/api/v2", tags=["V2 - Interactions (Stateful)"])
 
