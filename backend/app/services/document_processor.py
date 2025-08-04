@@ -208,7 +208,8 @@ class DocumentProcessorService:
             for chunk_index, chunk_text in enumerate(text_chunks):
                 chunk_id = f"{doc_id}_chunk_{chunk_index}"
                 chunk_metadata = {
-                    **metadata, # Inherit original metadata
+                    **metadata,
+                    "doc_id": str(doc_id), # Ensure it's a string
                     "chunk_number": chunk_index
                 }
                 all_processed_chunks.append({

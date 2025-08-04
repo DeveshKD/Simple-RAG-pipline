@@ -13,3 +13,4 @@ Pillow
 python-docx
 pandas
 openpyxl
+sqlalchemy

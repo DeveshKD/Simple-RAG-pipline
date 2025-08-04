@@ -98,50 +98,56 @@ class VectorDBService:
             logger.error(f"Error adding documents to ChromaDB: {e}", exc_info=True)
             raise VectorDBError(message="Error adding documents to ChromaDB.", details=str(e))
 
-    def query_documents(self, query_embedding: List[float], n_results: int = 5, filter_metadata: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    def query_documents(
+        self,
+        query_embedding: List[float],
+        n_results: int = 5,
+        allowed_doc_ids: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
         """
-        Queries the ChromaDB collection for similar documents based on a query embedding.
-
-        Args:
-            query_embedding (List[float]): The embedding vector for the query.
-            n_results (int): The number of top similar results to retrieve.
-            filter_metadata (Optional[Dict[str, Any]]): A dictionary for metadata filtering.
-                                                       Example: {"source_file": "some_doc.pdf"}
-
-        Returns:
-            List[Dict[str, Any]]: A list of query results. Each result includes
-                                  the document chunk, metadata, distance, etc.
-
-        Raises:
-            VectorDBError: If the ChromaDB collection is not available or if
-                an error occurs during the query operation.
+        Queries the ChromaDB collection, with robust handling of metadata filtering
+        and result parsing.
         """
         if not self.collection:
-            logger.error("ChromaDB collection is not available. Cannot query documents.")
             raise VectorDBError(message="ChromaDB collection is not initialized.")
+
+        if allowed_doc_ids is not None and not allowed_doc_ids:
+             logger.warning("Query attempted with no allowed documents for this session. Returning empty list.")
+             return []
+
+        filter_metadata = None
+        if allowed_doc_ids:
+            filter_metadata = {"doc_id": {"$in": allowed_doc_ids}}
+            logger.debug(f"Querying ChromaDB with doc_id filter: {filter_metadata}")
 
         try:
             results = self.collection.query(
-                query_embeddings=[query_embedding], # Requires a list of embeddings
+                query_embeddings=[query_embedding],
                 n_results=n_results,
-                where=filter_metadata if filter_metadata else None, # 'where' for metadata filtering
-                include=['documents', 'metadatas', 'distances'] # Specify what to include in results
+                where=filter_metadata,
+                include=['documents', 'metadatas', 'distances']
             )
 
-            # Format the results for easier use
             formatted_results = []
-            if results and results.get('ids') and results['ids'][0]:
-                for i in range(len(results['ids'][0])):
-                    formatted_results.append({
-                        "chunk_id": results['ids'][0][i],
-                        "text_chunk": results['documents'][0][i] if results.get('documents') else None,
-                        "metadata": results['metadatas'][0][i] if results.get('metadatas') else None,
-                        "distance": results['distances'][0][i] if results.get('distances') else None,
-                    })
-                logger.info(f"ChromaDB query returned {len(formatted_results)} results.")
-            else:
-                logger.info("ChromaDB query returned no results.")
+            
+            ids = results.get('ids', [[]])[0]
+            documents = results.get('documents', [[]])[0]
+            metadatas = results.get('metadatas', [[]])[0]
+            distances = results.get('distances', [[]])[0]
 
+            if not ids:
+                logger.info("ChromaDB query returned no results that matched the filter criteria.")
+                return []
+
+            for i in range(len(ids)):
+                formatted_results.append({
+                    "chunk_id": ids[i],
+                    "text_chunk": documents[i] if i < len(documents) else None,
+                    "metadata": metadatas[i] if i < len(metadatas) else None,
+                    "distance": distances[i] if i < len(distances) else None,
+                })
+            
+            logger.info(f"ChromaDB query returned {len(formatted_results)} results after filtering.")
             return formatted_results
 
         except Exception as e:
@@ -189,6 +195,35 @@ class VectorDBService:
         except Exception as e:
             logger.error(f"Error clearing collection '{self.collection_name}': {e}", exc_info=True)
             raise VectorDBError(message=f"Error clearing collection '{self.collection_name}'.", details=str(e))
+    
+    def delete_documents(self, doc_id: str):
+        """
+        Deletes all chunks associated with a specific document ID from the collection.
+
+        Args:
+            doc_id (str): The unique ID of the document whose chunks should be deleted.
+
+        Raises:
+            VectorDBError: If the collection is not available or if the delete
+                           operation fails.
+        """
+        if not self.collection:
+            logger.error("ChromaDB collection is not available. Cannot delete documents.")
+            raise VectorDBError(message="ChromaDB collection is not initialized.")
+
+        try:
+            # The 'where' filter is used to specify which documents to delete.
+            # We are deleting all chunks where the metadata 'doc_id' matches.
+            self.collection.delete(where={"doc_id": doc_id})
+            logger.info(f"Successfully deleted all chunks for doc_id '{doc_id}' from ChromaDB.")
+            logger.info(f"Total items in collection now: {self.collection.count()}")
+
+        except Exception as e:
+            logger.error(f"Error deleting documents for doc_id '{doc_id}' from ChromaDB: {e}", exc_info=True)
+            raise VectorDBError(
+                message=f"Error deleting documents for doc_id '{doc_id}' from ChromaDB.",
+                details=str(e)
+            )
 
     def get_all_documents(self, include_embeddings: bool = False) -> List[Dict[str, Any]]:
         """

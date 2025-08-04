@@ -4,8 +4,10 @@ from fastapi import FastAPI
 
 from .core.config import settings
 from .core.exceptions import VectorDBError
-from .api import documents_api, query_api
+from .api import documents_api, query_api, interactions_api
 from . import dependencies as deps
+from .database import engine
+from .models import db_models
 
 # Configure Logging
 logging.basicConfig(
@@ -34,6 +36,8 @@ async def lifespan(app: FastAPI):
         deps.query_processor_service = deps.QueryProcessorService(
             vector_db_service=deps.vector_db_service
         )
+        logger.info("Initializing database and creating tables if they don't exist...")
+        db_models.Base.metadata.create_all(bind=engine)
         logger.info("All application services initialized successfully.")
     
     except VectorDBError as e:
@@ -60,9 +64,9 @@ app = FastAPI(
 )
 
 # Include API Routers
-app.include_router(documents_api.router, prefix="/api/v1", tags=["Documents"])
-app.include_router(query_api.router, prefix="/api/v1", tags=["Query"])
-
+app.include_router(documents_api.router, prefix="/api/v2", tags=["Documents"])
+# app.include_router(query_api.router, prefix="/api/v1", tags=["V1 Query"])
+app.include_router(interactions_api.router, prefix="/api/v2", tags=["V2 - Interactions (Stateful)"])
 
 # Root Endpoint
 @app.get("/", tags=["Root"])
