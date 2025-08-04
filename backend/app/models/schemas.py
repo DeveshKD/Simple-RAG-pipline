@@ -42,11 +42,43 @@ class DocumentInfo(BaseModel):
     def serialize_dt(self, dt: Any, _info):
         if isinstance(dt, str): return dt
         return dt.isoformat()
+    
+class ChatMessage(BaseModel):
+    """
+    Represents a single message within a chat history.
+    """
+    id : uuid.UUID
+    role: str
+    content: str
+    timestamp: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class InteractionInfo(BaseModel):
+    """
+    A summary of a single interaction, used for listing all past chats.
+    """
+    id: uuid.UUID
+    title: str
+    created_at: str
+    documents: List[DocumentInfo] = []
+    class Config:
+        from_attributes = True
+    
+class InteractionHistory(InteractionInfo):
+    """
+
+    Represents the full details of a single interaction, including all messages.
+    """
+    messages: List[ChatMessage] = []
+
+    class Config:
+        from_attributes = True
 
 class DocumentUploadResponse(BaseModel):
     """Response after a document is uploaded to an interaction."""
-    interaction_id: uuid.UUID
-    document: DocumentInfo
+    interaction_state: InteractionHistory
 
 class ListDocumentsResponse(BaseModel):
     """
@@ -78,36 +110,4 @@ class InteractionQueryResponse(BaseModel):
     """
     interaction_id: uuid.UUID = Field(..., description="The ID of the chat session.")
     synthesized_answer: str = Field(..., description="AI's response to the user's query.")
-
-class ChatMessage(BaseModel):
-    """
-    Represents a single message within a chat history.
-    """
-    id : uuid.UUID
-    role: str
-    content: str
-    timestamp: Optional[str] = None
-
-    class Config:
-        from_attributes = True 
-
-class InteractionInfo(BaseModel):
-    """
-    A summary of a single interaction, used for listing all past chats.
-    """
-    id: uuid.UUID
-    title: str
-    created_at: str
-    documents: List[DocumentInfo] = []
-    class Config:
-        from_attributes = True
-
-class InteractionHistory(InteractionInfo):
-    """
-
-    Represents the full details of a single interaction, including all messages.
-    """
-    messages: List[ChatMessage] = []
-
-    class Config:
-        from_attributes = True
+ 

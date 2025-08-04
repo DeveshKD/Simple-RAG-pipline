@@ -77,17 +77,32 @@ async def create_or_update_interaction_with_document(
         db.commit()
         db.refresh(interaction)
         
-        document_info_for_response = models.schemas.DocumentInfo(
-            id=new_document_record.id,
-            filename=new_document_record.filename,
-            source_type=new_document_record.source_type,
-            created_at=new_document_record.created_at.isoformat()
+        full_interaction_state = models.schemas.InteractionHistory(
+            id=interaction.id,
+            title=interaction.title,
+            created_at=interaction.created_at.isoformat(),
+            documents=[
+                models.schemas.DocumentInfo(
+                    id=doc.id,
+                    filename=doc.filename,
+                    source_type=doc.source_type,
+                    created_at=doc.created_at.isoformat()
+                ) for doc in interaction.documents
+            ],
+            messages=[
+                models.schemas.ChatMessage(
+                    id=msg.id,
+                    role=msg.role,
+                    content=msg.content,
+                    timestamp=msg.timestamp.isoformat()
+                ) for msg in interaction.messages
+            ]
         )
 
         return models.schemas.DocumentUploadResponse(
-            interaction_id=interaction.id,
-            document=models.schemas.DocumentInfo.from_orm(document_info_for_response)
+            interaction_state=full_interaction_state
         )
+
     except (DocumentIngestionError, DocumentProcessingError, VectorDBError, LLMError) as e:
         raise HTTPException(status_code=500, detail=f"A server error occurred: {e.message}")
     finally:
@@ -154,7 +169,10 @@ async def list_interactions(db: Session = Depends(get_db)):
 
 @router.get("/interaction/{interaction_id}", response_model=models.schemas.InteractionHistory)
 async def get_interaction_history(interaction_id: uuid.UUID, db: Session = Depends(get_db)):
-    """Retrieves the full message history for a specific chat session."""
+    """
+    Retrieves the full message history AND the list of associated documents
+    for a specific chat session.
+    """
     interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
     if not interaction:
         raise HTTPException(status_code=404, detail="Interaction not found.")
@@ -162,6 +180,14 @@ async def get_interaction_history(interaction_id: uuid.UUID, db: Session = Depen
         id=interaction.id,
         title=interaction.title,
         created_at=interaction.created_at.isoformat(),
+        documents=[
+            models.schemas.DocumentInfo(
+                id=doc.id,
+                filename=doc.filename,
+                source_type=doc.source_type,
+                created_at=doc.created_at.isoformat()
+            ) for doc in interaction.documents
+        ],
         messages=[
             models.schemas.ChatMessage(
                 id=msg.id,
