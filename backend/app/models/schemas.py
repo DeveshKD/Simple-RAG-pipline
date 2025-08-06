@@ -2,20 +2,6 @@ from pydantic import BaseModel, EmailStr, Field, field_serializer
 from typing import List, Dict, Any, Optional
 import uuid
 
-#v1 schemas (some still required and some not)
-class SignupRequest(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
 class DocumentMetadata(BaseModel):
     """
     A flexible container for metadata associated with a document chunk.
@@ -96,7 +82,6 @@ class StatusResponse(BaseModel):
     status: str
     message: Optional[str] = None
 
-# schemas for v2
 class InteractionQueryRequest(BaseModel):
     """
     The request model for the unified interaction endpoint.

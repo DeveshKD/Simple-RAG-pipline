@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from .core.config import settings
 from .core.exceptions import VectorDBError
-from .api import documents_api, query_api, interactions_api, auth_api
+from .api import documents_api, interactions_api, auth_api
 from . import dependencies as deps
 from .database import engine
 from .models import db_models
@@ -36,9 +36,9 @@ async def lifespan(app: FastAPI):
         deps.query_processor_service = deps.QueryProcessorService(
             vector_db_service=deps.vector_db_service
         )
-        logger.info("Initializing database and creating tables if they don't exist...")
-        async with engine.begin() as conn:
-            await conn.run_sync(db_models.Base.metadata.create_all)
+        #logger.info("Initializing database and creating tables if they don't exist...")
+        #async with engine.begin() as conn:
+            #await conn.run_sync(db_models.Base.metadata.create_all)
         logger.info("All application services initialized successfully.")
     
     except VectorDBError as e:
