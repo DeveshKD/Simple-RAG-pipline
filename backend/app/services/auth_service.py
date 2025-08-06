@@ -1,38 +1,70 @@
-import logging
-from datetime import datetime, timedelta
-from typing import Any, Dict
+import uuid
+from typing import Optional
 
-from jose import jwt
-from passlib.context import CryptContext
-from app.core.config import settings
+from fastapi import Depends, Request
+from fastapi_users import BaseUserManager, UUIDIDMixin, FastAPIUsers
+from fastapi_users.authentication import (
+    AuthenticationBackend,
+    BearerTransport,
+    JWTStrategy,
+)
+from fastapi_users.db import SQLAlchemyUserDatabase
+from sqlalchemy.orm import Session
 
-logger = logging.getLogger(__name__)
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-def hash_password(password: str) -> str:
-    hashed = pwd_context.hash(password)
-    logger.debug("Password hashed.")
-    return hashed
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    valid = pwd_context.verify(plain_password, hashed_password)
-    logger.debug("Password verified: %s", valid)
-    return valid
+from ..core.config import settings
+from ..database import get_db
+from ..models.db_models import User
 
 
-def create_access_token(data: Dict[str, Any]) -> str:
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
-    to_encode.update({"exp": expire})
-    token = jwt.encode(to_encode, settings.secret_key, algorithm=settings.jwt_algorithm)
-    logger.debug("JWT token created.")
-    return token
+SECRET = settings.secret_key
+
+class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
+    """Manages user operations like registration, password resets, etc."""
+    reset_password_token_secret = SECRET
+    verification_token_secret = SECRET
+
+    async def on_after_register(self, user: User, request: Optional[Request] = None):
+        print(f"User {user.id} has registered.")
+
+    async def on_after_forgot_password(
+        self, user: User, token: str, request: Optional[Request] = None
+    ):
+        print(f"User {user.id} has forgot their password. Reset token: {token}")
+
+    async def on_after_request_verify(
+        self, user: User, token: str, request: Optional[Request] = None
+    ):
+        print(f"Verification requested for user {user.id}. Verification token: {token}")
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-    print(hash_password("test123"))
-    print(verify_password("test123", hash_password("test123")))
-    print(create_access_token({"sub": "testuser"}))
+
+# Define the transport for tokens (Bearer tokens in the Auth header)
+bearer_transport = BearerTransport(tokenUrl="auth/jwt/login")
+
+def get_jwt_strategy() -> JWTStrategy:
+    """Returns the JWT strategy with our secret and token lifetime."""
+    return JWTStrategy(secret=SECRET, lifetime_seconds=3600)
+
+# combines the transport and strategy
+auth_backend = AuthenticationBackend(
+    name="jwt",
+    transport=bearer_transport,
+    get_strategy=get_jwt_strategy,
+)
+
+# dependincies
+def _get_user_db(db: Session = Depends(get_db)):
+    """Dependency to get the user database adapter."""
+    yield SQLAlchemyUserDatabase(db, User)
+
+async def get_user_manager(user_db: SQLAlchemyUserDatabase = Depends(_get_user_db)):
+    """Dependency to get the UserManager."""
+    yield UserManager(user_db)
+
+fastapi_users = FastAPIUsers[User, uuid.UUID](
+    get_user_manager,
+    [auth_backend],
+)
+
+# get current active user.
+current_active_user = fastapi_users.current_user(active=True)
