@@ -33,7 +33,7 @@ class ChatMessage(BaseModel):
     """
     Represents a single message within a chat history.
     """
-    id : uuid.UUID
+    id : Optional[uuid.UUID]
     role: str
     content: str
     timestamp: Optional[str] = None

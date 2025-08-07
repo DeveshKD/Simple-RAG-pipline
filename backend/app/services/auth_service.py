@@ -39,7 +39,7 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
 
 
 # Define the transport for tokens (Bearer tokens in the Auth header)
-bearer_transport = BearerTransport(tokenUrl="auth/jwt/login")
+bearer_transport = BearerTransport(tokenUrl="/api/v2/auth/jwt/login")
 
 def get_jwt_strategy() -> JWTStrategy:
     """Returns the JWT strategy with our secret and token lifetime."""
