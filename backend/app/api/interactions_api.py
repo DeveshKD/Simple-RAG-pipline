@@ -4,7 +4,7 @@ import shutil
 import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -276,3 +276,66 @@ async def delete_interaction(
     await db.commit()
     logger.info(f"Deleted interaction with ID: {interaction_id}")
     return models.schemas.StatusResponse(status="success", message=f"Interaction {interaction_id} deleted.")
+
+@router.delete("/interaction/{interaction_id}/unlink-document/{document_id}", response_model=models.schemas.StatusResponse)
+async def unlink_document_from_interaction(
+    interaction_id: uuid.UUID,
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: models.db_models.User = Depends(current_active_user)
+):
+    """
+    Removes the association between a document and a chat interaction.
+    Both the document and interaction data remain intact - only the link is removed.
+    This should be added to interactions_api.py
+    """
+    logger.info(f"User {user.id} unlinking document {document_id} from interaction {interaction_id}")
+
+    # Verify interaction ownership
+    interaction_statement = select(models.db_models.ChatSession).filter(
+        models.db_models.ChatSession.id == interaction_id,
+        models.db_models.ChatSession.owner_id == user.id
+    )
+    interaction_result = await db.execute(interaction_statement)
+    interaction = interaction_result.scalar_one_or_none()
+
+    if not interaction:
+        raise HTTPException(status_code=404, detail="Interaction not found.")
+
+    # Verify document ownership and that it's linked to this interaction
+    doc_statement = select(models.db_models.Document).filter(
+        models.db_models.Document.id == document_id,
+        models.db_models.Document.owner_id == user.id
+    )
+    doc_result = await db.execute(doc_statement)
+    document = doc_result.scalar_one_or_none()
+
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    # Check if the association exists
+    existing_association = await db.execute(
+        select(models.db_models.interaction_document_association).where(
+            models.db_models.interaction_document_association.c.interaction_id == interaction_id,
+            models.db_models.interaction_document_association.c.document_id == document_id
+        )
+    )
+    if not existing_association.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Document is not linked to this interaction.")
+
+    try:
+        # Delete association
+        delete_statement = delete(models.db_models.interaction_document_association).where(
+            models.db_models.interaction_document_association.c.interaction_id == interaction_id,
+            models.db_models.interaction_document_association.c.document_id == document_id
+        )
+        await db.execute(delete_statement)
+        await db.commit()
+
+        return models.schemas.StatusResponse(
+            status="success",
+            message=f"Document '{document.filename}' unlinked from interaction '{interaction.title}' successfully."
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An unexpected server error occurred while unlinking document.")
