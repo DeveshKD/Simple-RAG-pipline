@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=60, validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     
     #database
-    supabase_url: str = Field(..., validation_alias="SUPABASE_URL")
+    database_url: str = Field(..., validation_alias="SUPABASE_URL")
     supabase_api_key: str = Field(..., validation_alias="SUPABASE_API_KEY")
 
     #vector store
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
     #sqlite
-    database_url: str = Field(default="sqlite:///./chat_database.db", validation_alias='DATABASE_URL')
+    #database_url: str = Field(default="sqlite:///./chat_database.db", validation_alias='DATABASE_URL')
 
     #project metadata
     project_name: str = "Multi-Tenant Visual RAG Platform"
@@ -57,5 +57,5 @@ else:
 
 print(
     f"Loaded config: Port={settings.port}, LogLevel={settings.log_level}, "
-    f"ChromaDB={settings.chroma_db_path}, Supabase={settings.supabase_url}"
+    f"ChromaDB={settings.chroma_db_path}, Supabase={settings.database_url}"
 )

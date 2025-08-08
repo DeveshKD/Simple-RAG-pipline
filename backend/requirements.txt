@@ -14,3 +14,6 @@ python-docx
 pandas
 openpyxl
 sqlalchemy
+fastapi-users[sqlalchemy]
+fastapi-users[jwt]
+alembic
