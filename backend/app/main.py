@@ -4,10 +4,11 @@ from fastapi import FastAPI
 
 from .core.config import settings
 from .core.exceptions import VectorDBError
-from .api import documents_api, query_api, interactions_api
+from .api import documents_api, interactions_api, auth_api, library_api
 from . import dependencies as deps
 from .database import engine
 from .models import db_models
+from fastapi.middleware.cors import CORSMiddleware
 
 # Configure Logging
 logging.basicConfig(
@@ -36,8 +37,9 @@ async def lifespan(app: FastAPI):
         deps.query_processor_service = deps.QueryProcessorService(
             vector_db_service=deps.vector_db_service
         )
-        logger.info("Initializing database and creating tables if they don't exist...")
-        db_models.Base.metadata.create_all(bind=engine)
+        #logger.info("Initializing database and creating tables if they don't exist...")
+        #async with engine.begin() as conn:
+            #await conn.run_sync(db_models.Base.metadata.create_all)
         logger.info("All application services initialized successfully.")
     
     except VectorDBError as e:
@@ -53,6 +55,7 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown...")
     # any cleanup tasks here if needed (e.g., closing database connections).
     # ChromaDB's persistent client handles its own shutdown gracefully.
+    await engine.dispose()  # Properly dispose of async engine
 
 
 # Create FastAPI Application Instance
@@ -63,10 +66,25 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+origins = [
+    "http://localhost",
+    "http://localhost:3000", # The default port for the Next.js dev server
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Include API Routers
-app.include_router(documents_api.router, prefix="/api/v2", tags=["Documents"])
+app.include_router(auth_api.router, prefix="/api/v2", tags=["Authentication"])
+#app.include_router(documents_api.router, prefix="/api/v2", tags=["Documents"])
 # app.include_router(query_api.router, prefix="/api/v1", tags=["V1 Query"])
 app.include_router(interactions_api.router, prefix="/api/v2", tags=["V2 - Interactions (Stateful)"])
+app.include_router(library_api.router, prefix="/api", tags=["library"])
 
 # Root Endpoint
 @app.get("/", tags=["Root"])
