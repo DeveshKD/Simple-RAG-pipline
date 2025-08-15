@@ -8,6 +8,7 @@ from .api import documents_api, interactions_api, auth_api, library_api
 from . import dependencies as deps
 from .database import engine
 from .models import db_models
+from fastapi.middleware.cors import CORSMiddleware
 
 # Configure Logging
 logging.basicConfig(
@@ -63,6 +64,19 @@ app = FastAPI(
     title=settings.project_name,
     openapi_url=f"/api/v1/openapi.json", # Standard location for OpenAPI spec
     lifespan=lifespan
+)
+
+origins = [
+    "http://localhost",
+    "http://localhost:3000", # The default port for the Next.js dev server
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Include API Routers
