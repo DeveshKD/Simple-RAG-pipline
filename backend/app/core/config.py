@@ -23,8 +23,8 @@ class Settings(BaseSettings):
 
     #llm api
     google_genai_api_key: str = Field(..., validation_alias="GEMINI_API_KEY")
-    google_genai_chat_model_id: str = Field(default="gemini-1.5-flash-latest", validation_alias="GOOGLE_GENAI_CHAT_MODEL_ID")
-    google_genai_embedding_model_id: str = Field(default="gemini-embedding-exp-03-07", validation_alias="GOOGLE_GENAI_EMBEDDING_MODEL_ID")
+    google_genai_chat_model_id: str = Field(default="gemini-2.5-flash", validation_alias="GOOGLE_GENAI_CHAT_MODEL_ID")
+    google_genai_embedding_model_id: str = Field(default="gemini-embedding-001", validation_alias="GOOGLE_GENAI_EMBEDDING_MODEL_ID")
 
     #common app settings
     host: str = Field(default="0.0.0.0", validation_alias="HOST")

@@ -1,23 +1,19 @@
 import logging
 from .services.document_ingestor import DocumentIngestorFactory
 from .services.document_processor import DocumentProcessorService
-from .services.vector_db_service import VectorDBService
+from .services.pgvector_service import PgVectorService
 from .services.query_processor import QueryProcessorService
-
-# This file creates "singleton" instances of the services that the whole
-# application will share. This is efficient and manages state correctly.
 
 logger = logging.getLogger(__name__)
 
-# --- Service Instances (will be initialized by main.py on startup) ---
-# We define them here as None, and the main app's lifespan manager will create them.
+# --- Service Instances ---
+# All set to None here; main.py lifespan manager creates the real instances.
 document_ingestor_factory: DocumentIngestorFactory | None = None
 document_processor_service: DocumentProcessorService | None = None
-vector_db_service: VectorDBService | None = None
+vector_db_service: PgVectorService | None = None
 query_processor_service: QueryProcessorService | None = None
 
-# --- Dependency Provider Functions for FastAPI ---
-# These functions are what FastAPI's `Depends()` will call.
+# --- Dependency provider functions for FastAPI Depends() ---
 
 def get_ingestor_factory_serv() -> DocumentIngestorFactory:
     if document_ingestor_factory is None:
@@ -29,9 +25,9 @@ def get_doc_processor_serv() -> DocumentProcessorService:
         raise RuntimeError("DocumentProcessorService not initialized.")
     return document_processor_service
 
-def get_vector_db_serv() -> VectorDBService:
+def get_vector_db_serv() -> PgVectorService:
     if vector_db_service is None:
-        raise RuntimeError("VectorDBService not initialized.")
+        raise RuntimeError("PgVectorService not initialized.")
     return vector_db_service
 
 def get_query_processor_serv() -> QueryProcessorService:
