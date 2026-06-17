@@ -1,33 +1,27 @@
-from sqlalchemy import create_engine, event 
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 from .core.config import settings
 
-engine = create_engine(
-    settings.database_url, connect_args={"check_same_thread": False}
+# Create async engine for Supabase PostgreSQL
+engine = create_async_engine(
+    settings.database_url,
+    echo=False
 )
 
-@event.listens_for(engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
+# Create async session maker
+AsyncSessionLocal = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
 
-# Each instance of SessionLocal will be a database session.
-# The class itself is not a session yet.
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# will inherit from this class to create each of the database models (ORM models).
 Base = declarative_base()
 
-# Dependency for our API routes
-def get_db():
+# Async dependency for our API routes
+async def get_db():
     """
-    A dependency function that yields a new database session for each request
+    An async dependency function that yields a new database session for each request
     and ensures it's closed afterward.
     """
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    async with AsyncSessionLocal() as session:
+        yield session

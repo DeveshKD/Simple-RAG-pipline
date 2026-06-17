@@ -4,7 +4,9 @@ import shutil
 import uuid
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
-from sqlalchemy.orm import Session
+from sqlalchemy import select, delete
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .. import models
 from ..database import get_db
@@ -17,8 +19,9 @@ from ..dependencies import (
 )
 from ..services.document_ingestor import DocumentIngestorFactory
 from ..services.document_processor import DocumentProcessorService
-from ..services.vector_db_service import VectorDBService
+from ..services.pgvector_service import PgVectorService
 from ..services.query_processor import QueryProcessorService
+from ..services.auth_service import current_active_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,81 +33,110 @@ os.makedirs(UPLOAD_DIRECTORY, exist_ok=True)
 async def create_or_update_interaction_with_document(
     interaction_id: Optional[uuid.UUID] = Form(None),
     file: UploadFile = File(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
+    user: models.db_models.User = Depends(current_active_user),
     ingestor_factory: DocumentIngestorFactory = Depends(get_ingestor_factory_serv),
     doc_processor: DocumentProcessorService = Depends(get_doc_processor_serv),
-    vector_db: VectorDBService = Depends(get_vector_db_serv),
+    vector_db: PgVectorService = Depends(get_vector_db_serv),
 ):
-    """
-    The primary endpoint to add knowledge.
-    - If interaction_id is NOT provided, it creates a NEW interaction.
-    - If interaction_id IS provided, it adds the document to that existing interaction.
-    """
-    interaction = None
-    if interaction_id is None:
-        logger.info(f"No interaction_id provided. Creating a new interaction based on file: {file.filename}")
-        interaction = models.db_models.ChatSession(title=file.filename)
-        db.add(interaction)
-        db.commit()
-        db.refresh(interaction)
-    else:
-        logger.info(f"Adding document '{file.filename}' to existing interaction '{interaction_id}'")
-        interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
-        if not interaction:
-            raise HTTPException(status_code=404, detail="Interaction not found.")
-
     temp_file_path = os.path.join(UPLOAD_DIRECTORY, file.filename)
+    
     try:
+        # Save file locally
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
+        # Extract Text
         raw_doc = ingestor_factory.create_ingestor(temp_file_path).ingest_document()
         
-        new_document_record = models.db_models.Document(filename=file.filename, source_type=raw_doc["metadata"].get("source_type"))
-        db.add(new_document_record)
-        db.commit()
-        db.refresh(new_document_record)
-        
-        doc_id_for_chroma = str(new_document_record.id)
-        raw_doc["doc_id"] = doc_id_for_chroma
+        # Setup the Interaction
+        if interaction_id is None:
+            logger.info(f"User {user.id} creating new interaction with file: {file.filename}")
+            interaction = models.db_models.ChatSession(title=file.filename, owner_id=user.id)
+            db.add(interaction)
+            await db.flush()
+        else:
+            logger.info(f"User {user.id} adding document to interaction '{interaction_id}'")
+            statement = select(models.db_models.ChatSession).filter(
+                models.db_models.ChatSession.id == interaction_id,
+                models.db_models.ChatSession.owner_id == user.id
+            )
+            result = await db.execute(statement)
+            interaction = result.scalar_one_or_none()
+            if not interaction:
+                raise HTTPException(status_code=404, detail="Interaction not found.")
 
+        # Setup the Document
+        new_document_record = models.db_models.Document(
+            filename=file.filename,
+            source_type=raw_doc["metadata"].get("source_type"),
+            owner_id=user.id
+        )
+        db.add(new_document_record)
+        await db.flush()
+        
+        # Process and Embed
+        raw_doc["doc_id"] = str(new_document_record.id)
         processed_chunks = await doc_processor.process_documents([raw_doc])
         if not processed_chunks:
-            raise HTTPException(status_code=422, detail="Failed to process document. No chunks were generated.")
+            raise HTTPException(status_code=422, detail="Failed to process document.")
         
-        vector_db.add_documents(processed_chunks)
-        interaction.documents.append(new_document_record)
-        db.commit()
-        db.refresh(interaction)
+        # Save to pgvector
+        await vector_db.add_documents(processed_chunks, db_session=db)
+        
+        # Create the association between doc and chat
+        association = models.db_models.interaction_document_association.insert().values(
+            interaction_id=interaction.id,
+            document_id=new_document_record.id
+        )
+        await db.execute(association)
+        
+        # Commit
+        await db.commit() 
+        await db.refresh(interaction) 
+        await db.refresh(new_document_record)
+
+        # Format response
+        statement = select(models.db_models.ChatSession).options(
+            selectinload(models.db_models.ChatSession.documents)
+        ).filter(models.db_models.ChatSession.id == interaction.id)
+        result = await db.execute(statement)
+        interaction_full = result.scalar_one()
         
         full_interaction_state = models.schemas.InteractionHistory(
-            id=interaction.id,
-            title=interaction.title,
-            created_at=interaction.created_at.isoformat(),
+            id=interaction_full.id,
+            title=interaction_full.title,
+            created_at=interaction_full.created_at.isoformat(),
             documents=[
                 models.schemas.DocumentInfo(
                     id=doc.id,
                     filename=doc.filename,
                     source_type=doc.source_type,
                     created_at=doc.created_at.isoformat()
-                ) for doc in interaction.documents
+                ) for doc in interaction_full.documents
             ],
             messages=[
                 models.schemas.ChatMessage(
-                    id=msg.id,
-                    role=msg.role,
-                    content=msg.content,
-                    timestamp=msg.timestamp.isoformat()
-                ) for msg in interaction.messages
-            ]
+                    id=None,
+                    role="system",
+                    content=f"Document '{new_document_record.filename}' has been added to this interaction.",
+                    timestamp=None
+                )
+            ] if interaction_id is None else []
         )
 
-        return models.schemas.DocumentUploadResponse(
-            interaction_state=full_interaction_state
-        )
+        return models.schemas.DocumentUploadResponse(interaction_state=full_interaction_state)
 
     except (DocumentIngestionError, DocumentProcessingError, VectorDBError, LLMError) as e:
+        await db.rollback() # undo if gemini or pgvetcor fails
         raise HTTPException(status_code=500, detail=f"A server error occurred: {e.message}")
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected server error occurred.")
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
@@ -113,11 +145,21 @@ async def create_or_update_interaction_with_document(
 async def handle_query(
     interaction_id: uuid.UUID,
     request: models.schemas.InteractionQueryRequest,
-    db: Session = Depends(get_db),
-    qp_service: QueryProcessorService = Depends(get_query_processor_serv)
+    db: AsyncSession = Depends(get_db),
+    qp_service: QueryProcessorService = Depends(get_query_processor_serv),
+    user: models.db_models.User = Depends(current_active_user)
 ):
     """Handles a user's message within a specific interaction."""
-    interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
+    statement = select(models.db_models.ChatSession).options(
+        selectinload(models.db_models.ChatSession.documents),
+        selectinload(models.db_models.ChatSession.messages)
+    ).filter(
+        models.db_models.ChatSession.id == interaction_id,
+        models.db_models.ChatSession.owner_id == user.id
+    )
+    result = await db.execute(statement)
+    interaction = result.scalar_one_or_none()
+    
     if not interaction:
         raise HTTPException(status_code=404, detail="Interaction not found.")
     
@@ -129,8 +171,8 @@ async def handle_query(
 
     user_message = models.db_models.ChatMessage(chat_id=interaction_id, role="user", content=request.query_text)
     db.add(user_message)
-    db.commit()
-    db.refresh(interaction)
+    await db.commit()
+    await db.refresh(interaction)
 
     allowed_doc_ids = [str(doc.id) for doc in interaction.documents]
     chat_history_for_prompt = [{"role": msg.role, "content": msg.content} for msg in interaction.messages]
@@ -139,12 +181,13 @@ async def handle_query(
         query_text=request.query_text,
         n_results=5,
         chat_history=chat_history_for_prompt,
-        allowed_doc_ids=allowed_doc_ids
+        allowed_doc_ids=allowed_doc_ids,
+        db_session=db
     )
     
     assistant_message = models.db_models.ChatMessage(chat_id=interaction_id, role="assistant", content=synthesized_answer)
     db.add(assistant_message)
-    db.commit()
+    await db.commit()
 
     return models.schemas.InteractionQueryResponse(
         interaction_id=interaction.id,
@@ -152,9 +195,20 @@ async def handle_query(
         )
 
 @router.get("/interactions", response_model=List[models.schemas.InteractionInfo])
-async def list_interactions(db: Session = Depends(get_db)):
+async def list_interactions(
+    db: AsyncSession = Depends(get_db),
+    user: models.db_models.User = Depends(current_active_user)
+    ):
     """Lists all past chat sessions, newest first."""
-    interactions = db.query(models.db_models.ChatSession).order_by(models.db_models.ChatSession.created_at.desc()).all()
+    statement = select(models.db_models.ChatSession).options(
+        selectinload(models.db_models.ChatSession.documents)
+    ).filter(
+        models.db_models.ChatSession.owner_id == user.id
+    ).order_by(models.db_models.ChatSession.created_at.desc())
+    
+    result = await db.execute(statement)
+    interactions = result.scalars().all()
+    
     response_data = []
     for interaction in interactions:
         response_data.append(
@@ -168,12 +222,24 @@ async def list_interactions(db: Session = Depends(get_db)):
 
 
 @router.get("/interaction/{interaction_id}", response_model=models.schemas.InteractionHistory)
-async def get_interaction_history(interaction_id: uuid.UUID, db: Session = Depends(get_db)):
+async def get_interaction_history(
+    interaction_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    user: models.db_models.User = Depends(current_active_user)
+    ):
     """
     Retrieves the full message history AND the list of associated documents
     for a specific chat session.
     """
-    interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
+    statement = select(models.db_models.ChatSession).options(
+        selectinload(models.db_models.ChatSession.documents),
+        selectinload(models.db_models.ChatSession.messages)
+    ).filter(
+        models.db_models.ChatSession.id == interaction_id,
+        models.db_models.ChatSession.owner_id == user.id
+    )
+    result = await db.execute(statement)
+    interaction = result.scalar_one_or_none()
+    
     if not interaction:
         raise HTTPException(status_code=404, detail="Interaction not found.")
     response_data = models.schemas.InteractionHistory(
@@ -201,13 +267,84 @@ async def get_interaction_history(interaction_id: uuid.UUID, db: Session = Depen
 
 
 @router.delete("/interaction/{interaction_id}", response_model=models.schemas.StatusResponse)
-async def delete_interaction(interaction_id: uuid.UUID, db: Session = Depends(get_db)):
+async def delete_interaction(
+    interaction_id: uuid.UUID, db: AsyncSession = Depends(get_db),
+    user: models.db_models.User = Depends(current_active_user)
+    ):
     """Deletes a chat session and all its messages."""
-    interaction = db.query(models.db_models.ChatSession).filter(models.db_models.ChatSession.id == interaction_id).first()
+    statement = select(models.db_models.ChatSession).filter(
+        models.db_models.ChatSession.id == interaction_id,
+        models.db_models.ChatSession.owner_id == user.id
+    )
+    result = await db.execute(statement)
+    interaction = result.scalar_one_or_none()
     if not interaction:
         raise HTTPException(status_code=404, detail="Interaction not found.")
     
-    db.delete(interaction)
-    db.commit()
+    await db.delete(interaction)
+    await db.commit()
     logger.info(f"Deleted interaction with ID: {interaction_id}")
     return models.schemas.StatusResponse(status="success", message=f"Interaction {interaction_id} deleted.")
+
+@router.delete("/interaction/{interaction_id}/unlink-document/{document_id}", response_model=models.schemas.StatusResponse)
+async def unlink_document_from_interaction(
+    interaction_id: uuid.UUID,
+    document_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: models.db_models.User = Depends(current_active_user)
+):
+    """
+    Removes the association between a document and a chat interaction.
+    Both the document and interaction data remain intact - only the link is removed.
+    This should be added to interactions_api.py
+    """
+    logger.info(f"User {user.id} unlinking document {document_id} from interaction {interaction_id}")
+
+    # Verify interaction ownership
+    interaction_statement = select(models.db_models.ChatSession).filter(
+        models.db_models.ChatSession.id == interaction_id,
+        models.db_models.ChatSession.owner_id == user.id
+    )
+    interaction_result = await db.execute(interaction_statement)
+    interaction = interaction_result.scalar_one_or_none()
+
+    if not interaction:
+        raise HTTPException(status_code=404, detail="Interaction not found.")
+
+    # Verify document ownership and that it's linked to this interaction
+    doc_statement = select(models.db_models.Document).filter(
+        models.db_models.Document.id == document_id,
+        models.db_models.Document.owner_id == user.id
+    )
+    doc_result = await db.execute(doc_statement)
+    document = doc_result.scalar_one_or_none()
+
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    # Check if the association exists
+    existing_association = await db.execute(
+        select(models.db_models.interaction_document_association).where(
+            models.db_models.interaction_document_association.c.interaction_id == interaction_id,
+            models.db_models.interaction_document_association.c.document_id == document_id
+        )
+    )
+    if not existing_association.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Document is not linked to this interaction.")
+
+    try:
+        # Delete association
+        delete_statement = delete(models.db_models.interaction_document_association).where(
+            models.db_models.interaction_document_association.c.interaction_id == interaction_id,
+            models.db_models.interaction_document_association.c.document_id == document_id
+        )
+        await db.execute(delete_statement)
+        await db.commit()
+
+        return models.schemas.StatusResponse(
+            status="success",
+            message=f"Document '{document.filename}' unlinked from interaction '{interaction.title}' successfully."
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An unexpected server error occurred while unlinking document.")

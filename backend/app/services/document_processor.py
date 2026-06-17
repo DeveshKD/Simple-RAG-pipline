@@ -1,10 +1,11 @@
 import logging
 import re
-from typing import List, Dict, Any, Iterator
+from typing import List, Dict, Any
 import google.generativeai as genai
 
 from ..core.config import settings
-from ..core.exceptions import DocumentProcessingError, LLMError
+from ..core.exceptions import LLMError
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,16 @@ except Exception as e:
 
 
 class DocumentProcessorService:
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 100):
+    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 150):
         """
         Initializes the DocumentProcessorService.
         """
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", "•", ".", " ", ""]
+        )
 
     # --- 1. Data Cleaning Functions (Strategies) ---
 
@@ -76,22 +81,15 @@ class DocumentProcessorService:
             return self._clean_narrative_text(text)
 
 
-    def chunk_text_by_sentences(self, text: str, sentences_per_chunk: int = 5) -> Iterator[str]:
+    def chunk_text(self, text: str) -> List[str]:
         """
-        Chunks cleaned text by a specified number of sentences.
-        A simple regex-based splitter. For more complex text, a library like NLTK could be used.
+        Chunks cleaned text intelligently, respecting paragraphs and bullet points.
         """
         if not text:
-            return
-            
-        sentences = re.split(r'(?<=[.!?])\s+', text)
+            return []
         
-        current_chunk_sentences = []
-        for i, sentence in enumerate(sentences):
-            current_chunk_sentences.append(sentence)
-            if (i + 1) % sentences_per_chunk == 0 or i == len(sentences) - 1:
-                yield " ".join(current_chunk_sentences)
-                current_chunk_sentences = []
+        # This one line replaces your entire regex logic!
+        return self.text_splitter.split_text(text)
 
 
     async def get_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -147,7 +145,7 @@ class DocumentProcessorService:
                     
                     # Optional: A small delay can help prevent rapid-fire requests
                     # that might trigger rate limits even with small batches.
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(5)
 
                 except Exception as multi_batch_error:
                     # If even a small batch fails, it's a more serious problem.
@@ -192,7 +190,7 @@ class DocumentProcessorService:
                 continue
 
             # Step 2: Chunk the cleaned text
-            text_chunks = list(self.chunk_text_by_sentences(cleaned_text))
+            text_chunks = list(self.chunk_text(cleaned_text))
             if not text_chunks:
                 logger.warning(f"Document '{doc_id}' resulted in no text chunks. Skipping.")
                 continue

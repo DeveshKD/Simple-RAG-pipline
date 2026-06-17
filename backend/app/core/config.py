@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(default=60, validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES")
     
     #database
-    supabase_url: str = Field(..., validation_alias="SUPABASE_URL")
+    database_url: str = Field(..., validation_alias="SUPABASE_URL")
     supabase_api_key: str = Field(..., validation_alias="SUPABASE_API_KEY")
 
     #vector store
@@ -23,8 +23,8 @@ class Settings(BaseSettings):
 
     #llm api
     google_genai_api_key: str = Field(..., validation_alias="GEMINI_API_KEY")
-    google_genai_chat_model_id: str = Field(default="gemini-1.5-flash-latest", validation_alias="GOOGLE_GENAI_CHAT_MODEL_ID")
-    google_genai_embedding_model_id: str = Field(default="gemini-embedding-exp-03-07", validation_alias="GOOGLE_GENAI_EMBEDDING_MODEL_ID")
+    google_genai_chat_model_id: str = Field(default="gemini-2.5-flash", validation_alias="GOOGLE_GENAI_CHAT_MODEL_ID")
+    google_genai_embedding_model_id: str = Field(default="gemini-embedding-001", validation_alias="GOOGLE_GENAI_EMBEDDING_MODEL_ID")
 
     #common app settings
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
     #sqlite
-    database_url: str = Field(default="sqlite:///./chat_database.db", validation_alias='DATABASE_URL')
+    #database_url: str = Field(default="sqlite:///./chat_database.db", validation_alias='DATABASE_URL')
 
     #project metadata
     project_name: str = "Multi-Tenant Visual RAG Platform"
@@ -57,5 +57,5 @@ else:
 
 print(
     f"Loaded config: Port={settings.port}, LogLevel={settings.log_level}, "
-    f"ChromaDB={settings.chroma_db_path}, Supabase={settings.supabase_url}"
+    f"ChromaDB={settings.chroma_db_path}, Supabase={settings.database_url}"
 )
